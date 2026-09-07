@@ -78,16 +78,24 @@ type ACPAgent struct {
 	wireSequence            atomic.Uint64
 	sessions                map[string]string // conversationID -> sessionID (legacy ACP)
 	// pendingPersistedSessions 在标准 ACP 握手确认身份前隔离磁盘中的旧 session。
-	pendingPersistedSessions   map[string]string
-	legacyRuntimeGeneration    uint64
-	sessionGenerations         map[string]uint64 // conversationID -> legacy runtime generation
-	bindingRevisions           map[string]uint64 // conversationID -> latest binding intent revision
-	bindingRevisionCounter     uint64
-	threads                    map[string]string // conversationID -> threadID (codex app-server)
-	codexThreadSubscriptions   map[string]uint64 // threadID -> subscribed wire epoch
-	codexThreadConfigs         map[string]CodexThreadConfig
-	codexThreadConfigRevisions map[string]uint64
-	codexThreadProviders       map[string]string
+	pendingPersistedSessions map[string]string
+	legacyRuntimeGeneration  uint64
+	sessionGenerations       map[string]uint64 // conversationID -> legacy runtime generation
+	bindingRevisions         map[string]uint64 // conversationID -> latest binding intent revision
+	bindingRevisionCounter   uint64
+	// codexBindingMu serializes only mapping intent/commit boundaries. It is
+	// never held across app-server or Desktop IPC, so Clear and a newer Use can
+	// invalidate an older in-flight result.
+	codexBindingMu              sync.Mutex
+	codexBindingRevisions       map[string]uint64 // conversationID -> latest Codex binding intent
+	codexBindingRevisionCounter uint64
+	codexThreadLifecycles       map[string]codexThreadLifecycle
+	codexThreadLifecycleCounter uint64
+	threads                     map[string]string // conversationID -> threadID (codex app-server)
+	codexThreadSubscriptions    map[string]uint64 // threadID -> subscribed wire epoch
+	codexThreadConfigs          map[string]CodexThreadConfig
+	codexThreadConfigRevisions  map[string]uint64
+	codexThreadProviders        map[string]string
 	// resumeOnFirstUse marks bindings whose current client still needs a
 	// thread/resume subscription before observation or the first write.
 	resumeOnFirstUse      map[string]bool // conversationID -> resume needed

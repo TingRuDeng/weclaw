@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -178,6 +179,154 @@ func TestACPAgentConsumesCodexThreadArchivedNotification(t *testing.T) {
 	}
 	if observedThreadID != "thread-archive" {
 		t.Fatalf("archive observer thread=%q", observedThreadID)
+	}
+}
+
+func TestACPAgentArchivedNotificationDeletesOwnerThreadAfterWriterLeaseFinishes(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"},
+		Cwd: t.TempDir(), StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	seedCodexArchiveTestBindings(a)
+	request := CodexRuntimeRequest{Ref: CodexThreadRef{
+		ConversationID: "conversation-a", ThreadID: "thread-archive",
+	}}
+	lease, err := a.codexOwners.beginTurn(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a.handleCodexThreadArchivedNotification(json.RawMessage(`{"threadId":"thread-archive"}`))
+
+	assertCodexConversationCleared(t, a, "conversation-a")
+	if _, ok := a.codexOwners.threadBinding("thread-archive"); !ok {
+		t.Fatal("active writer lease lost its owner thread before finishing")
+	}
+	lease.finish()
+	if _, ok := a.codexOwners.threadBinding("thread-archive"); ok {
+		t.Fatal("finished writer lease left an archived owner thread")
+	}
+}
+
+func TestForgetCodexThreadTreatsActiveLeaseCleanupAsDeferredSuccess(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"},
+		Cwd: t.TempDir(), StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	seedCodexArchiveTestBindings(a)
+	request := CodexRuntimeRequest{Ref: CodexThreadRef{
+		ConversationID: "conversation-a", ThreadID: "thread-archive",
+	}}
+	lease, err := a.codexOwners.beginTurn(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.finish()
+
+	if err := a.forgetCodexThread("thread-archive"); err != nil {
+		t.Fatalf("forgetCodexThread error=%v, want deferred cleanup success", err)
+	}
+	assertCodexConversationCleared(t, a, "conversation-a")
+	if _, ok := a.codexOwners.threadBinding("thread-archive"); !ok {
+		t.Fatal("deferred cleanup removed owner thread before writer lease finished")
+	}
+
+	lease.finish()
+	if _, ok := a.codexOwners.threadBinding("thread-archive"); ok {
+		t.Fatal("deferred cleanup left owner thread after writer lease finished")
+	}
+}
+
+func TestArchivedThreadIgnoresDesktopSnapshotsUntilUnarchived(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"},
+		Cwd: t.TempDir(), StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	seedCodexArchiveTestBindings(a)
+	a.handleCodexThreadArchivedNotification(json.RawMessage(`{"threadId":"thread-archive"}`))
+
+	a.codexOwners.observeDesktopSnapshot("thread-archive", 2, CodexThreadState{
+		ThreadID: "thread-archive", ThreadStatus: "idle",
+	})
+	if _, ok := a.codexOwners.threadBinding("thread-archive"); ok {
+		t.Fatal("late Desktop snapshot recreated archived owner thread")
+	}
+
+	a.handleCodexThreadUnarchivedNotification(json.RawMessage(`{"threadId":"thread-archive"}`))
+	a.codexOwners.observeDesktopSnapshot("thread-archive", 3, CodexThreadState{
+		ThreadID: "thread-archive", ThreadStatus: "idle",
+	})
+	binding, ok := a.codexOwners.threadBinding("thread-archive")
+	if !ok || binding.Runtime != CodexRuntimeDesktop {
+		t.Fatalf("owner binding=%#v ok=%t, want new Desktop snapshot after unarchive", binding, ok)
+	}
+}
+
+func TestACPAgentUnarchivedNotificationAllowsOnlyNewUseGeneration(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"},
+		Cwd: t.TempDir(), StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	seedCodexArchiveTestBindings(a)
+	a.handleCodexThreadArchivedNotification(json.RawMessage(`{"threadId":"thread-archive"}`))
+
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	var readCalls atomic.Int32
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		if readCalls.Add(1) == 1 {
+			close(readStarted)
+			<-releaseRead
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-archive","status":{"type":"idle"}}}`), nil
+	}
+	staleUse := make(chan error, 1)
+	go func() {
+		staleUse <- a.UseCodexThread(context.Background(), "conversation-new", "thread-archive")
+	}()
+
+	<-readStarted
+	a.handleCodexThreadUnarchivedNotification(json.RawMessage(`{"threadId":"thread-archive"}`))
+	close(releaseRead)
+	if err := <-staleUse; !errors.Is(err, ErrCodexControlChanged) {
+		t.Fatalf("stale UseCodexThread error=%v, want lifecycle conflict", err)
+	}
+	assertCodexConversationCleared(t, a, "conversation-new")
+
+	if err := a.UseCodexThread(context.Background(), "conversation-new", "thread-archive"); err != nil {
+		t.Fatalf("new-generation UseCodexThread error=%v", err)
+	}
+	if threadID, ok := a.CurrentCodexThread("conversation-new"); !ok || threadID != "thread-archive" {
+		t.Fatalf("local binding=(%q,%t), want unarchived thread", threadID, ok)
+	}
+	if binding, ok := a.codexOwners.currentConversationBinding("conversation-new"); !ok || binding.Ref.ThreadID != "thread-archive" {
+		t.Fatalf("owner binding=%#v ok=%t, want unarchived thread", binding, ok)
+	}
+}
+
+func TestACPAgentUnarchivedNotificationCancelsDeferredOwnerThreadDeletion(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"},
+		Cwd: t.TempDir(), StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	seedCodexArchiveTestBindings(a)
+	request := CodexRuntimeRequest{Ref: CodexThreadRef{
+		ConversationID: "conversation-a", ThreadID: "thread-archive",
+	}}
+	lease, err := a.codexOwners.beginTurn(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a.handleCodexThreadArchivedNotification(json.RawMessage(`{"threadId":"thread-archive"}`))
+	a.handleCodexThreadUnarchivedNotification(json.RawMessage(`{"threadId":"thread-archive"}`))
+	lease.finish()
+
+	if _, ok := a.codexOwners.threadBinding("thread-archive"); !ok {
+		t.Fatal("new unarchived generation was deleted when the old writer lease finished")
 	}
 }
 

@@ -182,6 +182,10 @@ func (a *ACPAgent) resolveCodexRuntimeForInputLocked(
 	ctx context.Context,
 	req CodexRuntimeRequest,
 ) (CodexThreadBinding, error) {
+	if err := a.validateCodexRuntimeSupport(req); err != nil {
+		return CodexThreadBinding{}, err
+	}
+	intent := a.beginCodexThreadBindingIntent(req.Ref.ConversationID, req.Ref.ThreadID)
 	// A private Desktop binding always stays on its verified IPC transport. It
 	// must never fall through to app-server startup merely because this route is
 	// not the one that originally populated the runtime cache.
@@ -200,8 +204,12 @@ func (a *ACPAgent) resolveCodexRuntimeForInputLocked(
 			}
 			current.Ref = req.Ref
 			current.State = state
-			a.codexOwners.bindConversation(req.Ref, current)
-			return current, nil
+			return a.commitCodexRuntimeBindingIntent(
+				intent,
+				func(ownerRevision uint64) (CodexThreadBinding, error) {
+					return a.codexOwners.bindConversationAtRevision(req.Ref, current, ownerRevision)
+				},
+			)
 		}
 	}
 
@@ -230,7 +238,7 @@ func (a *ACPAgent) resolveCodexRuntimeForInputLocked(
 		if preparation.Deferred {
 			return CodexThreadBinding{}, errCodexProviderMigrationDeferred
 		}
-		binding, err = a.activateSharedCodexHost(ctx, req)
+		binding, err = a.activateSharedCodexHostWithIntent(ctx, req, intent, 0)
 	} else {
 		preparation, prepareErr := a.prepareCodexThreadProviderLocked(ctx, req)
 		if prepareErr != nil {
@@ -239,13 +247,13 @@ func (a *ACPAgent) resolveCodexRuntimeForInputLocked(
 		if preparation.Deferred {
 			return CodexThreadBinding{}, errCodexProviderMigrationDeferred
 		}
-		binding, err = a.inspectCodexRuntimeLocked(ctx, req)
+		binding, err = a.inspectCodexRuntimeWithIntentLocked(ctx, req, intent)
 	}
 	if err != nil {
 		return binding, err
 	}
 	if a.desktopProbe != nil && (binding.Runtime == CodexRuntimeUnknown || binding.Runtime == CodexRuntimeConflict) {
-		return a.handoffCodexRuntimeLocked(ctx, req)
+		return a.handoffCodexRuntimeWithIntentLocked(ctx, req, intent)
 	}
 	return binding, nil
 }
@@ -263,20 +271,27 @@ func (a *ACPAgent) prepareCodexRuntimeForWrite(
 	}
 	a.codexSubscriptionMu.Lock()
 	defer a.codexSubscriptionMu.Unlock()
-	needsResume := strings.EqualFold(binding.State.ThreadStatus, "notLoaded")
+	needsResume := strings.EqualFold(binding.State.ThreadStatus, "notLoaded") && !binding.State.Active
 	if strings.EqualFold(binding.State.ThreadStatus, "systemError") {
 		return binding, fmt.Errorf("%w: Codex thread 处于 systemError", ErrCodexRuntimeUnavailable)
 	}
 	if !needsResume {
 		return binding, nil
 	}
-	if err := a.resumeThread(ctx, req.Ref.ConversationID, req.Ref.ThreadID); err != nil {
-		if recovered, ok := a.recoverCodexDesktopActiveWriter(ctx, req, err); ok {
+	intent, ok := a.currentCodexThreadBindingIntent(req.Ref)
+	if !ok {
+		return binding, ErrCodexControlChanged
+	}
+	if err := a.resumeThreadWithoutSubscription(ctx, req.Ref.ConversationID, req.Ref.ThreadID); err != nil {
+		if recovered, ok, recoverErr := a.recoverCodexDesktopActiveWriterExpected(
+			ctx, req, err, &binding, intent,
+		); recoverErr != nil {
+			return binding, recoverErr
+		} else if ok {
 			return recovered, nil
 		}
 		return binding, fmt.Errorf("写入前恢复 Codex thread: %w", err)
 	}
-	a.bindCodexAppServerThread(req.Ref.ConversationID, req.Ref.ThreadID)
 	state, _, err := a.readCodexAppServerThreadStateResult(ctx, req.Ref.ThreadID)
 	if err != nil {
 		return binding, err
@@ -284,37 +299,58 @@ func (a *ACPAgent) prepareCodexRuntimeForWrite(
 	if strings.EqualFold(state.ThreadStatus, "systemError") || strings.EqualFold(state.ThreadStatus, "notLoaded") {
 		return binding, fmt.Errorf("%w: Codex thread 状态为 %s", ErrCodexRuntimeUnavailable, state.ThreadStatus)
 	}
-	return a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, state)
+	binding, err = a.commitCodexThreadBindingIntent(
+		intent, false, true,
+		func(ownerRevision uint64) (CodexThreadBinding, error) {
+			return a.codexOwners.activateRuntimeAtRevision(
+				req, CodexRuntimeWeClaw, state, ownerRevision, intent.expectedThreadID,
+			)
+		},
+	)
+	if err == nil {
+		a.persistState()
+	}
+	return binding, err
 }
 
-// recoverCodexDesktopActiveWriter handles the Codex App Code Mode topology:
-// the official daemon can read the stored thread, while the App's verified
-// follower IPC is the only transport that can steer the process holding the
-// thread writer lock. No other resume failure is eligible for this fallback.
-func (a *ACPAgent) recoverCodexDesktopActiveWriter(
+// recoverCodexDesktopActiveWriterExpected handles the Codex App Code Mode
+// topology. Only verified follower IPC may steer the process holding the
+// writer lock, and only for the active turn proven by Desktop state.
+func (a *ACPAgent) recoverCodexDesktopActiveWriterExpected(
 	ctx context.Context,
 	req CodexRuntimeRequest,
 	resumeErr error,
-) (CodexThreadBinding, bool) {
+	expected *CodexThreadBinding,
+	intent codexThreadBindingIntent,
+) (CodexThreadBinding, bool, error) {
 	if !a.codexDesktopCoordination || a.desktopProbe == nil || a.desktopRuntime == nil ||
 		!strings.Contains(strings.ToLower(resumeErr.Error()), "already has an active writer") {
-		return CodexThreadBinding{}, false
+		return CodexThreadBinding{}, false, nil
 	}
 	if err := a.desktopProbe.LoadHistoryForActiveWriter(ctx, req.Ref); err != nil {
-		return CodexThreadBinding{}, false
+		return CodexThreadBinding{}, false, nil
 	}
 	state, err := a.desktopRuntime.threadState(req.Ref.ThreadID)
 	state, err = validateCodexThreadSelectionState(req.Ref.ThreadID, state, err)
-	if err != nil || !state.Active || strings.TrimSpace(state.ActiveTurnID) == "" {
-		return CodexThreadBinding{}, false
+	if err != nil || strings.EqualFold(state.ThreadStatus, "systemError") ||
+		!state.Active || strings.TrimSpace(state.ActiveTurnID) == "" {
+		return CodexThreadBinding{}, false, nil
 	}
-	binding, err := a.codexOwners.activateRuntime(req, CodexRuntimeDesktop, state)
+	binding, err := a.commitCodexThreadBindingIntent(
+		intent, false, false,
+		func(ownerRevision uint64) (CodexThreadBinding, error) {
+			return a.codexOwners.activateDesktopActiveWriter(
+				req, expected, state, ownerRevision, intent.expectedThreadID,
+			)
+		},
+	)
 	if err != nil {
-		return CodexThreadBinding{}, false
+		return binding, false, err
 	}
+	a.persistState()
 	log.Printf("[codex-runtime] Codex App Code Mode owns active writer; using verified Desktop follower thread=%q turn=%q",
 		req.Ref.ThreadID, state.ActiveTurnID)
-	return binding, true
+	return binding, true, nil
 }
 
 func (a *ACPAgent) redispatchCodexTurn(ctx context.Context, req CodexTurnRequest, raceRetries int) (string, error) {
@@ -463,8 +499,18 @@ func (a *ACPAgent) replaceMissingFirstTurnThread(
 	req.Runtime.Ref = current
 	req.Runtime.Checkpoint = CodexRolloutCheckpoint{}
 	req.Runtime.PendingFirstTurn = true
-	binding, err := a.codexOwners.activateRuntime(
-		req.Runtime, CodexRuntimeWeClaw, CodexThreadState{ThreadID: threadID},
+	intent, ok := a.currentCodexThreadBindingIntent(current)
+	if !ok {
+		return req, CodexThreadBinding{}, ErrCodexControlChanged
+	}
+	binding, err := a.commitCodexThreadBindingIntent(
+		intent, false, true,
+		func(ownerRevision uint64) (CodexThreadBinding, error) {
+			return a.codexOwners.activateRuntimeAtRevision(
+				req.Runtime, CodexRuntimeWeClaw, CodexThreadState{ThreadID: threadID},
+				ownerRevision, intent.expectedThreadID,
+			)
+		},
 	)
 	if err != nil {
 		return req, binding, err

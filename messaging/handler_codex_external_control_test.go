@@ -136,6 +136,50 @@ func TestCodexStopInterruptsExternalActiveTurn(t *testing.T) {
 	}
 }
 
+func TestExternalCodexControlRecoversPersistedActiveTargetAfterRestart(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	threadID := "thread-recovered"
+	conversationID := buildCodexConversationID("user-1", "codex", workspace)
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.ensureCodexSessions().setThread(bindingKey, workspace, threadID)
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+
+	target, denied := h.cachedExternalCodexTarget(conversationID, "user-1")
+	if denied {
+		t.Fatal("persisted target must not be denied to its route owner")
+	}
+	if target.task != nil {
+		t.Fatal("restart recovery must not invent an in-memory task")
+	}
+	if target.threadID != threadID {
+		t.Fatalf("thread=%q, want %q", target.threadID, threadID)
+	}
+}
+
+func TestCodexStopUsesAuthoritativeTurnAfterRestart(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	threadID := "thread-recovered"
+	conversationID := buildCodexConversationID("user-1", "codex", workspace)
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.ensureCodexSessions().setThread(bindingKey, workspace, threadID)
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{
+		ThreadID: threadID, Active: true, ActiveTurnID: "turn-authoritative",
+	})
+
+	text, handled := h.interruptExternalCodexTask(externalCodexTaskCommand{
+		ctx: context.Background(), key: conversationID, agent: ag, actor: "user-1",
+	})
+	if !handled || !strings.Contains(text, "已发送停止请求") {
+		t.Fatalf("handled=%v text=%q", handled, text)
+	}
+	if ag.interruptThreadID != threadID || ag.interruptTurnID != "turn-authoritative" {
+		t.Fatalf("interrupt=(%q,%q), want (%q,%q)", ag.interruptThreadID, ag.interruptTurnID, threadID, "turn-authoritative")
+	}
+}
+
 func TestFeishuStopResolvesInProcessUnknownRuntime(t *testing.T) {
 	h, ag, _, route := liveMessageFixture(t, false)
 	h.defaultName = "codex"

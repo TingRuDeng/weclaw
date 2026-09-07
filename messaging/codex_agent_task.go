@@ -59,6 +59,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	}
 	executionKey := route.conversationID
 	runtimeOwner, ownerRevision := codexTaskOwnerSnapshot(opts.agent)
+	writerRoute := codexTaskWriterRoute(opts.platform, opts.accountID, opts.reply)
 	opts.route = route
 	admission := h.beginOrQueueActiveTask(agentCtx, executionKey, activeTaskMeta{
 		owner:        opts.userID,
@@ -66,6 +67,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		agentName:    opts.agentName,
 		message:      opts.message,
 		runtimeOwner: runtimeOwner, ownerRevision: ownerRevision,
+		writerPlatform: opts.platform, writerAccountID: opts.accountID, writerDeliveryRoute: writerRoute,
 		codexThreadID: route.threadID, inProcessCodexLifecycle: liveCodexLifecycle,
 		interactionLease: interactionLease, detachCodexObserver: detachCodexObserver,
 		trace: opts.trace.WithConversation(route.conversationID).WithThreadTurn(route.threadID, ""),

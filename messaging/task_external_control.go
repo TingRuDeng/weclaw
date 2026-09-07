@@ -17,10 +17,15 @@ type externalCodexControlRequest struct {
 }
 
 type externalCodexControlTarget struct {
-	task     *activeAgentTask
-	threadID string
-	turnID   string
-	reserved bool
+	task           *activeAgentTask
+	threadID       string
+	turnID         string
+	reserved       bool
+	routeUserID    string
+	agentName      string
+	conversationID string
+	workspaceRoot  string
+	owner          string
 }
 
 // externalCodexControlState 返回外部任务是否存在、是否可控制以及当前用户是否无权操作。
@@ -29,6 +34,11 @@ func (h *Handler) externalCodexControlState(key string, actor string) (bool, boo
 	task := h.tasks.active[key]
 	if task == nil {
 		h.tasks.mu.Unlock()
+		if _, ok := h.ensureCodexSessions().controlTargetForConversation(key, actor); ok {
+			// The durable session is only a candidate. The control operation will
+			// re-read the authoritative Host before writing anything.
+			return true, true, false
+		}
 		return false, false, false
 	}
 	task.mu.Lock()
@@ -63,7 +73,10 @@ func (h *Handler) resolveCachedExternalCodexControl(req externalCodexControlRequ
 		return target, true, fmt.Errorf("只有任务发起人可以控制当前任务")
 	}
 	if target.task == nil {
-		return target, false, nil
+		if target.threadID == "" {
+			return target, false, nil
+		}
+		return target, true, nil
 	}
 	if target.reserved {
 		return target, true, fmt.Errorf("当前 Codex 任务观察尚未激活，暂不能执行%s操作", req.action)
@@ -93,8 +106,8 @@ func (h *Handler) resolveExternalCodexControlLocked(
 		return target, nil
 	}
 	route := codexConversationRoute{
-		bindingKey:     codexBindingKey(target.task.routeUserID, target.task.agentName),
-		conversationID: req.key,
+		bindingKey: target.bindingKey(), conversationID: firstNonBlank(target.conversationID, req.key),
+		workspaceRoot: target.workspaceRoot, threadID: target.threadID,
 	}
 	binding, err := liveAgent.InspectCodexRuntime(ctx, agent.CodexRuntimeRequest{
 		Ref:    agent.CodexThreadRef{ConversationID: req.key, ThreadID: target.threadID},
@@ -115,7 +128,9 @@ func (h *Handler) resolveExternalCodexControlLocked(
 		return target, fmt.Errorf("共享 Codex app-server 当前没有可控制的 active turn")
 	}
 	target.turnID = state.ActiveTurnID
-	target.task.refreshExternalCodexTurn(binding, state.ActiveTurnID)
+	if target.task != nil {
+		target.task.refreshExternalCodexTurn(binding, state.ActiveTurnID)
+	}
 	return target, nil
 }
 
@@ -124,6 +139,13 @@ func (h *Handler) cachedExternalCodexTarget(key string, actor string) (externalC
 	defer h.tasks.mu.Unlock()
 	task := h.tasks.active[key]
 	if task == nil {
+		if persisted, ok := h.ensureCodexSessions().controlTargetForConversation(key, actor); ok {
+			return externalCodexControlTarget{
+				threadID: persisted.ThreadID, routeUserID: persisted.RouteUserID,
+				agentName: persisted.AgentName, conversationID: persisted.ConversationID,
+				workspaceRoot: persisted.WorkspaceRoot, owner: persisted.OwnerUserID,
+			}, false
+		}
 		return externalCodexControlTarget{}, false
 	}
 	task.mu.Lock()
@@ -136,6 +158,14 @@ func (h *Handler) cachedExternalCodexTarget(key string, actor string) (externalC
 	}
 	return externalCodexControlTarget{
 		task: task, threadID: task.codexThreadID, turnID: task.codexTurnID,
-		reserved: task.phase == codexTaskReserved,
+		reserved: task.phase == codexTaskReserved, routeUserID: task.routeUserID,
+		agentName: task.agentName, conversationID: firstNonBlank(task.conversationID, key),
 	}, false
+}
+
+func (target externalCodexControlTarget) bindingKey() string {
+	if target.task != nil {
+		return codexBindingKey(target.task.routeUserID, target.task.agentName)
+	}
+	return codexBindingKey(target.routeUserID, target.agentName)
 }

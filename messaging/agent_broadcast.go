@@ -201,8 +201,10 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 	}
 	key := route.conversationID
 	pending := h.broadcastPendingCodexTask(req, name, ag, route, reply)
+	writerRoute := codexTaskWriterRoute(req.platformName, req.accountID, reply)
 	admission := h.beginOrQueueActiveTask(ctx, key, activeTaskMeta{
 		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message,
+		writerPlatform: req.platformName, writerAccountID: req.accountID, writerDeliveryRoute: writerRoute,
 		codexThreadID: route.threadID, inProcessCodexLifecycle: liveCodexLifecycle,
 		interactionLease: interactionLease, detachCodexObserver: detachCodexObserver, trace: taskOpts.trace,
 	}, pending)

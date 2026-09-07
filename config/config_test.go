@@ -507,6 +507,45 @@ func TestNormalizeCodexRemoteFirstEnablesControlledUpdateForExistingSharedHost(t
 	}
 }
 
+func TestNormalizeCodexRemoteFirstEnablesMultiFrontendByDefault(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agents["codex"] = AgentConfig{
+		Type: "acp", Command: "codex",
+		Args: []string{"app-server", "--listen", "stdio://"},
+	}
+
+	if !NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("NormalizeCodexRemoteFirst() = false, want shared frontend defaults")
+	}
+	got := cfg.Agents["codex"]
+	if got.CodexMultiFrontend == nil || !*got.CodexMultiFrontend {
+		t.Fatalf("CodexMultiFrontend=%v, want true for native shared app-server", got.CodexMultiFrontend)
+	}
+	if got.CodexAppDaemon == nil || !*got.CodexAppDaemon {
+		t.Fatalf("CodexAppDaemon=%v, want true with multi-frontend default", got.CodexAppDaemon)
+	}
+	if got.EffectiveCodexHostMode() != "auto" {
+		t.Fatalf("EffectiveCodexHostMode()=%q, want platform-specific shared Host selection with multi-frontend default", got.EffectiveCodexHostMode())
+	}
+}
+
+func TestNormalizeCodexRemoteFirstEnablesMultiFrontendWithExistingAppDaemon(t *testing.T) {
+	enabled := true
+	cfg := DefaultConfig()
+	cfg.Agents["codex"] = AgentConfig{
+		Type: "acp", Command: "codex",
+		Args: []string{"app-server", "--listen", "stdio://"}, CodexAppDaemon: &enabled,
+	}
+
+	if !NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("NormalizeCodexRemoteFirst() = false, want multi-frontend default")
+	}
+	got := cfg.Agents["codex"]
+	if got.CodexMultiFrontend == nil || !*got.CodexMultiFrontend {
+		t.Fatalf("CodexMultiFrontend=%v, want true when App daemon reuse is enabled", got.CodexMultiFrontend)
+	}
+}
+
 func TestNormalizeCodexRemoteFirstKeepsExplicitUpdatePolicy(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Agents["codex"] = AgentConfig{

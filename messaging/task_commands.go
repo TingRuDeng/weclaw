@@ -235,6 +235,15 @@ func (h *Handler) interruptExternalCodexTask(req externalCodexTaskCommand) (stri
 	if err != nil {
 		return err.Error(), true
 	}
+	if target.task == nil {
+		if !req.expectation.empty() {
+			return "该暂存消息已处理，或操作卡片已经过期。", true
+		}
+		if err := runtimeAg.InterruptCodexThread(req.ctx, req.key, target.threadID, target.turnID); err != nil {
+			return fmt.Sprintf("停止当前共享 Codex 任务失败: %v", err), true
+		}
+		return sharedCodexStopAccepted, true
+	}
 	target.task.mu.Lock()
 	matches := target.task.matchesPendingTaskControlLocked(req.expectation)
 	target.task.mu.Unlock()

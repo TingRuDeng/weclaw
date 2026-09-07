@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
@@ -43,4 +44,23 @@ type codexConversationRoute struct {
 	workspaceRoot  string
 	conversationID string
 	threadID       string
+}
+
+// codexTaskWriterRoute captures the message endpoint that initiated a local
+// Codex turn. It is separate from follower routes, which only observe a turn.
+func codexTaskWriterRoute(platformName platform.PlatformName, accountID string, reply platform.Replier) platform.DeliveryRoute {
+	route := platform.DeliveryRoute{Platform: platformName, AccountID: accountID}
+	if reporter, ok := optionalDeliveryRouteReporter(progressReplier(reply)); ok {
+		route = reporter.DeliveryRoute()
+		if route.Platform == "" {
+			route.Platform = platformName
+		}
+		if route.AccountID == "" {
+			route.AccountID = accountID
+		}
+	}
+	route.AccountID = strings.TrimSpace(route.AccountID)
+	route.ChatID = strings.TrimSpace(route.ChatID)
+	route.ReplyToID = strings.TrimSpace(route.ReplyToID)
+	return route
 }

@@ -180,7 +180,8 @@ func (c AgentConfig) EffectiveCodexHostMode() string {
 }
 
 // EffectiveCodexMultiFrontend 返回是否在平台启动前准备唯一共享服务。
-// 缺省保持旧版 auto/managed 兼容行为，避免升级后改变既有 Host 拓扑。
+// 标准原生 Codex 配置会由 NormalizeCodexRemoteFirst 显式写入 true；
+// 这里保留 nil 的兼容语义，避免影响未经过规范化的嵌入方配置。
 func (c AgentConfig) EffectiveCodexMultiFrontend() bool {
 	return boolValueDefault(c.CodexMultiFrontend, false)
 }

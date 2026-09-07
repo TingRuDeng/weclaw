@@ -76,7 +76,7 @@ weclaw status
 
 macOS 上，`codex_host_mode: auto` 在启用 App 复用且安装了带官方 Node 的 Codex App 时选择 `shared`：App、官方 CLI、飞书和微信连接同一个官方 app-server。App 的完整启动配置、工具和权限通过适配入口保留，消息端无需另建会话服务。其他环境沿用 official daemon 或 managed 兼容路径；显式 `daemon`、`managed` 不会自动改为 `shared`。
 
-设置 `"codex_multi_frontend": true` 后，WeClaw 在消息平台启动前准备并验证共享服务。macOS 的 `auto` 选择 App 共享适配，其他平台使用官方 daemon；standalone 缺失、Host 冲突或身份验证失败会阻止启动。该开关不能与 `managed`、自定义 `app_server_socket`、`run_as_user` 或 `codex_app_reuse_daemon: false` 并用。
+设置 `"codex_multi_frontend": true` 后，WeClaw 在消息平台启动前准备并验证共享服务。对于标准原生 ACP `app-server` 拓扑（`codex_host_mode` 为 `auto`/`daemon`、没有自定义 socket 或 `run_as_user`，且未显式关闭 App 复用），省略该字段会在规范化时默认写入 `true`；显式 `false` 关闭此强制门禁，并阻止规范化重新启用未配置的 App 复用。该开关不再把 Host 模式固定为 `daemon`：macOS 的 `auto` 可选择 App 共享适配，其他平台使用官方 daemon。standalone 缺失、Host 冲突或身份验证失败会阻止启动，不会先开放消息入口或回退 managed。该开关不能与 `managed`、自定义 `app_server_socket`、`run_as_user` 或 `codex_app_reuse_daemon: false` 并用。
 
 除显式 `--force` 外，shared managed Host、official daemon 和受控 `weclaw codex cli` 在启动、接管或协调停止前都会执行只读多 Host 预检。macOS 通过 `kern.procargs2` 读取内核记录的可执行文件路径和原始 argv，Linux 通过 `/proc/<pid>/exe` 与 `/proc/<pid>/cmdline` 读取，再按 PGID 聚合 Node 包装进程和原生子进程；额外 Host、进程表/原始参数不可读或权威身份无法确认都失败关闭。`codex --remote`、帮助、daemon、proxy、schema generation，以及 App 包内带精确 `features.code_mode_host=true` 标记的 Code Mode helper 不算额外共享 Host；同样标记不能替非 App 可执行文件绕过预检。只读预检不停止任何进程；强制路径的额外终止权限和身份复核见“运行与更新”。任何路径都不按名称结束既有 App 或未知进程。该检查只证明扫描时点，不是跨 socket/CODEX_HOME 的持续全局锁。
 
@@ -393,10 +393,10 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 - 审计日志默认开启，不记录密钥。
 - Codex `permission_level` 支持 `default`、`auto_review`、`full_access`；默认档位为 `default`。
 - Codex 默认自动管理共享 Unix socket；仅在多进程或 `run_as_user` 部署中配置 `app_server_socket`，其父目录必须归目标用户所有且权限不宽于 `0700`。
-- `codex_multi_frontend: true` 是完整共享的用户意图开关：它强制 official daemon、要求 standalone 已安装并禁止兼容回退；省略时继续使用旧版 `auto` 兼容策略。
-- `codex_host_mode` 支持 `auto`、`daemon`、`managed`。macOS 默认 `auto` 在官方 daemon 已运行或 standalone 可用时直接固定为 `daemon`，不会因 App 已运行而改选 Desktop Host；只有 standalone 不可用时才进入 App 私有 Host 或 `managed` 的兼容路径。显式 `daemon` 在 macOS 保留 Desktop IPC 协调，但不允许切换到 App Host；它不回退，且不能与 `app_server_socket` 或 `run_as_user` 混用。不启用 Desktop 协调的平台同样按“官方 daemon 可用则使用，否则 managed”选择。官方 socket 身份不明、App 私有 IPC 不可达或 Host authority 无法证明时都失败关闭，不静默启动第二个 Host。
+- `codex_multi_frontend` 控制平台启动前的完整共享门禁。标准原生 Codex ACP `app-server` 的 `auto`/`daemon` 拓扑在没有自定义 socket、`run_as_user` 或显式 App 复用关闭时，缺省值会规范化为 `true`；要求 standalone 已安装并禁止兼容回退，但不强制 Host 模式为 `daemon`。显式 `false` 保留不强制共享的兼容策略。
+- `codex_host_mode` 支持 `auto`、`daemon`、`managed`、`shared`。macOS 的 `auto` 在启用 App 复用且 App 含官方 Node 时选择 `shared`，其他环境沿用 official daemon/managed 探测；自定义 socket 或用户使用 managed 兼容路径。显式 `daemon` 不自动改选 shared，在 macOS 保留 thread 级 Desktop follower 协调：只有 active-writer 错误加同 thread/turn IPC 证据才建立该 binding，其他 thread 仍使用 daemon。显式 `daemon`、`shared` 均不能与 `app_server_socket` 或 `run_as_user` 混用；Host authority 无法证明时失败关闭，不静默启动第二个 Host。
 - shared managed Host、official daemon、受控 `weclaw codex cli` 及协调停止在变更 Host 状态前执行受检 UID 范围内的多 Host 预检；普通模式只读且对额外/不可证明 Host 失败关闭。显式 `--force` 才允许退出 App，并在实时 UID、PGID、启动时间、原始 argv 和命令指纹复核后停止当前用户的 Codex `app-server` 进程组。任何模式都不按名称或旧 PID 停止进程。该检查是时点门禁，不是持续全局锁。
-- 原生 Codex 的 `auto`/`daemon` 配置默认写入 `codex_app_reuse_daemon: true`。该字段只在 macOS 生效，并管理后续 App 启动使用的 launchd 环境：WeClaw 会对齐有效的 `CODEX_HOME`、`CODEX_SQLITE_HOME` 与 control socket，只补齐缺失路径，显式冲突则失败关闭。官方 daemon 尚未验证、存在强制 CLI 覆盖，或已运行 App 仍持有私有 `app-server` 时也会失败关闭。WeClaw 不会为此退出 App；首次启用或路径变更后必须完整重启 App。该流程不迁移、删除或清理旧数据库、WAL/SHM 或 writer-lock 文件。
+- 原生 Codex 的 `auto`/`daemon` 配置默认写入 `codex_app_reuse_daemon: true`，除非显式关闭共享或 App 复用。该字段只在 macOS 生效，并管理后续 App 启动使用的 launchd 环境：WeClaw 会对齐有效的 `CODEX_HOME`、`CODEX_SQLITE_HOME` 与 control socket，只补齐缺失路径，显式冲突则失败关闭。官方 daemon 尚未验证、存在强制 CLI 覆盖，或已运行 App 仍持有未标记的私有 `app-server` 时也会失败关闭。WeClaw 不会为此退出 App；首次启用或路径变更后必须完整重启 App。该流程不迁移、删除或清理旧数据库、WAL/SHM 或 writer-lock 文件。
 - 原生 Codex shared app-server 默认使用 `codex_auto_update: incompatible`：只有上游错误明确指出状态库 schema/version 与当前 CLI 不兼容，且没有 writer lease 时，兼容 `managed` 模式才调用官方 `codex update` 并验证版本真实变化。通用 `failed to initialize sqlite state runtime`、数据库锁争用、损坏、socket 就绪超时、调用方取消、普通进程退出和连接错误都不是升级证据。官方 `daemon` 模式不由 WeClaw 更新 CLI。设为 `off` 可完全禁用；失败或版本未变化时保持不可写，不回退其他 Agent。
 
 | Codex 权限档位 | 行为 |

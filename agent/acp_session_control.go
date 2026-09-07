@@ -52,14 +52,11 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 	}
 
 	if a.protocol == protocolCodexAppServer {
-		a.mu.Lock()
-		delete(a.threads, conversationID)
-		delete(a.resumeOnFirstUse, conversationID)
-		a.mu.Unlock()
+		intent, _ := a.invalidateCodexThreadBinding(conversationID)
 		a.persistState()
 		log.Printf("[acp] thread reset (conversation=%s), creating new thread", conversationID)
 
-		return a.createResetCodexThread(ctx, conversationID)
+		return a.createResetCodexThread(ctx, conversationID, intent)
 	}
 
 	a.mu.Lock()
@@ -76,8 +73,12 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 }
 
 // createResetCodexThread 处理 /new 的新 thread 创建，并在 stdin 关闭时重启一次。
-func (a *ACPAgent) createResetCodexThread(ctx context.Context, conversationID string) (string, error) {
-	threadID, err := a.createThread(ctx, conversationID)
+func (a *ACPAgent) createResetCodexThread(
+	ctx context.Context,
+	conversationID string,
+	intent codexThreadBindingIntent,
+) (string, error) {
+	threadID, err := a.createThreadWithIntent(ctx, conversationID, intent)
 	if err == nil {
 		return threadID, nil
 	}
@@ -89,7 +90,7 @@ func (a *ACPAgent) createResetCodexThread(ctx context.Context, conversationID st
 	if err := a.Start(ctx); err != nil {
 		return "", fmt.Errorf("restart codex runtime: %w", err)
 	}
-	threadID, err = a.createThread(ctx, conversationID)
+	threadID, err = a.createThreadWithIntent(ctx, conversationID, intent)
 	if err != nil {
 		return "", fmt.Errorf("create new thread after runtime restart: %w", err)
 	}

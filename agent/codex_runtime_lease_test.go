@@ -794,8 +794,10 @@ func TestHandoffCodexRuntimeReadsNotLoadedWithoutResuming(t *testing.T) {
 		switch method {
 		case "thread/read":
 			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"notLoaded"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
 		default:
-			return nil, fmt.Errorf("binding must use only thread/read, got %s", method)
+			return nil, fmt.Errorf("binding must use only thread/read and thread/turns/list, got %s", method)
 		}
 	}
 	restarted := false
@@ -812,8 +814,8 @@ func TestHandoffCodexRuntimeReadsNotLoadedWithoutResuming(t *testing.T) {
 	if restarted {
 		t.Fatal("ordinary frontend binding must not restart the Codex Host")
 	}
-	if !reflect.DeepEqual(methods, []string{"thread/read"}) {
-		t.Fatalf("methods=%v, want lightweight thread/read only", methods)
+	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/turns/list"}) {
+		t.Fatalf("methods=%v, want metadata and bounded turn page", methods)
 	}
 	if threadID, ok := a.CurrentCodexThread(request.Ref.ConversationID); !ok || threadID != request.Ref.ThreadID {
 		t.Fatalf("CurrentCodexThread()=(%q,%v), want (%q,true)", threadID, ok, request.Ref.ThreadID)
@@ -839,7 +841,7 @@ func TestRunCodexTurnResumesNotLoadedAfterAuthorityRead(t *testing.T) {
 			}
 			return json.RawMessage(fmt.Sprintf(`{"thread":{"id":"thread-1","status":{"type":%q}}}`, status)), nil
 		case "thread/resume":
-			if len(methods) == 1 || methods[len(methods)-2] != "thread/read" {
+			if len(methods) < 2 || methods[len(methods)-2] != "thread/turns/list" {
 				return nil, fmt.Errorf("thread/resume ran before authoritative thread/read: %v", methods)
 			}
 			loaded = true
@@ -865,9 +867,58 @@ func TestRunCodexTurnResumesNotLoadedAfterAuthorityRead(t *testing.T) {
 	if err != nil || reply != "完成" {
 		t.Fatalf("RunCodexTurn reply=%q error=%v", reply, err)
 	}
-	wantPrefix := []string{"thread/read", "thread/resume", "thread/read", "thread/turns/list", "turn/start"}
+	wantPrefix := []string{"thread/read", "thread/turns/list", "thread/resume", "thread/read", "thread/turns/list", "turn/start"}
 	if !reflect.DeepEqual(methods, wantPrefix) {
 		t.Fatalf("methods=%v, want %v", methods, wantPrefix)
+	}
+}
+
+func TestRunCodexTurnSteersNotLoadedThreadWithActiveTurn(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
+	var methods []string
+	var steerExpected []string
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"notLoaded","activeFlags":[]}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[{"id":"turn-active","status":"inProgress","items":[]}],"nextCursor":null}`), nil
+		case "thread/items/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "turn/steer":
+			requestParams := params.(map[string]interface{})
+			steerExpected = append(steerExpected, requestParams["expectedTurnId"].(string))
+			return json.RawMessage(`{"turnId":"turn-active"}`), nil
+		case "thread/resume":
+			return nil, fmt.Errorf("thread thread-1 already has an active writer")
+		case "turn/start":
+			return nil, fmt.Errorf("turn/start must not be used for an active turn")
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+	}
+	dispatchCodexRuntimeTestCompletion(a, "thread-1", "turn-active", "补充输入已处理")
+
+	reply, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "补充当前任务",
+	})
+
+	if err != nil || reply != "补充输入已处理" {
+		t.Fatalf("RunCodexTurn reply=%q error=%v methods=%v", reply, err, methods)
+	}
+	if !reflect.DeepEqual(steerExpected, []string{"turn-active"}) {
+		t.Fatalf("steer expectedTurnId=%v, want one authoritative active turn", steerExpected)
+	}
+	for _, method := range methods {
+		if method == "thread/resume" || method == "turn/start" {
+			t.Fatalf("methods=%v, notLoaded active turn must steer without resume/start", methods)
+		}
 	}
 }
 
@@ -901,6 +952,8 @@ func TestRunCodexTurnUsesDesktopFollowerWhenCodeModeHostOwnsWriter(t *testing.T)
 		switch method {
 		case "thread/read":
 			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"notLoaded"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
 		case "thread/resume":
 			return nil, fmt.Errorf("agent error: thread thread-1 already has an active writer")
 		default:
@@ -916,8 +969,8 @@ func TestRunCodexTurnUsesDesktopFollowerWhenCodeModeHostOwnsWriter(t *testing.T)
 	if err != nil || reply != "补充输入已处理" {
 		t.Fatalf("RunCodexTurn reply=%q error=%v", reply, err)
 	}
-	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/resume"}) {
-		t.Fatalf("daemon methods=%v, want read then one resume attempt", methods)
+	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/turns/list", "thread/resume"}) {
+		t.Fatalf("daemon methods=%v, want read, turn page, then one resume attempt", methods)
 	}
 	if probe.loadCalls != 1 {
 		t.Fatalf("Desktop history loads=%d, want 1", probe.loadCalls)
@@ -958,6 +1011,8 @@ func TestRunCodexTurnDoesNotUseDesktopFollowerWithoutActiveTurnProof(t *testing.
 		switch method {
 		case "thread/read":
 			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"notLoaded"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
 		case "thread/resume":
 			return nil, fmt.Errorf("agent error: thread thread-1 already has an active writer")
 		default:
@@ -972,8 +1027,8 @@ func TestRunCodexTurnDoesNotUseDesktopFollowerWithoutActiveTurnProof(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "already has an active writer") {
 		t.Fatalf("RunCodexTurn error=%v, want original active-writer failure", err)
 	}
-	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/resume"}) {
-		t.Fatalf("daemon methods=%v, want read then one resume attempt", methods)
+	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/turns/list", "thread/resume"}) {
+		t.Fatalf("daemon methods=%v, want read, turn page, then one resume attempt", methods)
 	}
 	if probe.loadCalls != 1 || len(caller.calls) != 0 {
 		t.Fatalf("Desktop history loads=%d calls=%#v, input must not be sent without active-turn proof", probe.loadCalls, caller.calls)

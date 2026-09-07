@@ -9,6 +9,7 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/observability"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 type activeAgentTask struct {
@@ -28,6 +29,9 @@ type activeAgentTask struct {
 	view                    taskViewState
 	runtimeOwner            agent.CodexRuntimeHolder
 	ownerRevision           uint64
+	writerPlatform          platform.PlatformName
+	writerAccountID         string
+	writerDeliveryRoute     platform.DeliveryRoute
 	phase                   codexTaskPhase
 	codexThreadID           string
 	codexTurnID             string
@@ -140,6 +144,9 @@ type activeTaskMeta struct {
 	message                 string
 	runtimeOwner            agent.CodexRuntimeHolder
 	ownerRevision           uint64
+	writerPlatform          platform.PlatformName
+	writerAccountID         string
+	writerDeliveryRoute     platform.DeliveryRoute
 	codexThreadID           string
 	codexTurnID             string
 	inProcessCodexLifecycle bool

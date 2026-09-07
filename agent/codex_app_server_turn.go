@@ -127,7 +127,7 @@ func (a *ACPAgent) callCodexAppServerTurnStart(runtime *codexAppServerTurnRuntim
 		// conversation/thread mapping was persisted before the turn began, so only
 		// update the connection-local subscription index here. In particular, an
 		// observer may detach while this RPC is still returning.
-		a.trackCodexThreadSubscription(runtime.opts.conversationID, runtime.threadID)
+		a.trackCodexThreadSubscription(runtime.threadID)
 		if runtime.opts.onStarted != nil {
 			if acceptErr := runtime.opts.onStarted(turnID); acceptErr != nil {
 				return a.rejectStartedCodexTurn(runtime.threadID, turnID, acceptErr)
@@ -410,14 +410,7 @@ func (a *ACPAgent) rejectStartedCodexTurn(threadID string, turnID string, cause 
 
 // clearCodexThread 清理指定 conversation 的 thread 映射，仅供用户显式切换或新建会话。
 func (a *ACPAgent) clearCodexThread(conversationID string) string {
-	a.mu.Lock()
-	oldThreadID := a.threads[conversationID]
-	delete(a.threads, conversationID)
-	delete(a.resumeOnFirstUse, conversationID)
-	a.mu.Unlock()
-	if a.codexOwners != nil {
-		a.codexOwners.unbindConversation(conversationID)
-	}
+	_, oldThreadID := a.invalidateCodexThreadBinding(conversationID)
 	a.persistState()
 	return oldThreadID
 }

@@ -45,22 +45,22 @@ func (a *ACPAgent) ArchiveCodexThread(ctx context.Context, threadID string) erro
 	if state.Active {
 		return ErrCodexWriterBusy
 	}
+	if err := a.invalidateCodexArchivedThread(threadID, true); err != nil {
+		return err
+	}
+	a.persistState()
 
 	result, archiveErr := a.rpc(ctx, "thread/archive", map[string]interface{}{"threadId": threadID})
 	if archiveErr == nil {
 		archiveErr = validateACPObjectResult(result, "thread/archive")
 	}
 	if archiveErr != nil {
-		forgetErr := a.forgetCodexThread(threadID)
 		return fmt.Errorf(
 			"%w: thread=%s: %v",
 			ErrCodexArchiveOutcomeUnknown,
 			threadID,
-			errors.Join(archiveErr, forgetErr),
+			archiveErr,
 		)
-	}
-	if err := a.forgetCodexThread(threadID); err != nil {
-		return fmt.Errorf("%w: 清理本地 thread 绑定: %v", ErrCodexArchiveOutcomeUnknown, err)
 	}
 	return nil
 }
@@ -93,41 +93,82 @@ func (a *ACPAgent) readCodexThreadArchiveState(ctx context.Context, threadID str
 
 // forgetCodexThread 删除所有指向归档 thread 的进程内和持久化路由。
 func (a *ACPAgent) forgetCodexThread(threadID string) error {
+	err := a.invalidateCodexArchivedThread(threadID, false)
+	a.persistState()
+	return err
+}
+
+func (a *ACPAgent) invalidateCodexArchivedThread(threadID string, requireNoLease bool) error {
 	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	a.codexBindingMu.Lock()
+	defer a.codexBindingMu.Unlock()
+
 	var ownerErr error
 	if a.codexOwners != nil {
-		ownerErr = a.codexOwners.forgetThread(threadID)
+		ownerErr = a.codexOwners.forgetThread(threadID, requireNoLease)
+		if ownerErr != nil && requireNoLease {
+			return ownerErr
+		}
 	}
 	a.mu.Lock()
+	a.advanceCodexThreadLifecycleLocked(threadID, true)
 	for conversationID, currentThreadID := range a.threads {
 		if strings.TrimSpace(currentThreadID) != threadID {
 			continue
 		}
+		a.advanceCodexBindingRevisionLocked(conversationID)
 		delete(a.threads, conversationID)
 		delete(a.resumeOnFirstUse, conversationID)
 	}
 	delete(a.codexThreadConfigs, threadID)
 	delete(a.codexThreadConfigRevisions, threadID)
 	a.mu.Unlock()
-	a.persistState()
 	return ownerErr
 }
 
-// forgetThread 只在没有 writer lease 时删除 thread 及其全部 conversation 路由。
-func (r *codexRuntimeOwnerRegistry) forgetThread(threadID string) error {
+// forgetThread 删除 conversation 路由；活动 writer lease 的 thread 会在 lease
+// 结束后删除，因此通知驱动的清理已经成功登记，不再返回 busy。
+func (r *codexRuntimeOwnerRegistry) forgetThread(threadID string, requireNoLease bool) error {
 	threadID = strings.TrimSpace(threadID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.leases[threadID] != nil {
+	leaseActive := r.leases[threadID] != nil
+	if leaseActive && requireNoLease {
 		return ErrCodexWriterBusy
 	}
+	r.archivedThreads[threadID] = true
 	for conversationID, currentThreadID := range r.conversations {
 		if strings.TrimSpace(currentThreadID) == threadID {
+			r.advanceConversationRevisionLocked(conversationID)
 			delete(r.conversations, conversationID)
 		}
 	}
+	if leaseActive {
+		return nil
+	}
 	delete(r.threads, threadID)
 	return nil
+}
+
+func (a *ACPAgent) handleCodexThreadUnarchivedNotification(params json.RawMessage) {
+	var notification struct {
+		ThreadID string `json:"threadId"`
+	}
+	if err := json.Unmarshal(params, &notification); err != nil || strings.TrimSpace(notification.ThreadID) == "" {
+		log.Printf("[acp] ignored invalid thread/unarchived notification")
+		return
+	}
+	a.codexBindingMu.Lock()
+	a.mu.Lock()
+	a.advanceCodexThreadLifecycleLocked(notification.ThreadID, false)
+	a.mu.Unlock()
+	if a.codexOwners != nil {
+		a.codexOwners.unarchiveThread(notification.ThreadID)
+	}
+	a.codexBindingMu.Unlock()
 }
 
 func (a *ACPAgent) handleCodexThreadArchivedNotification(params json.RawMessage) {

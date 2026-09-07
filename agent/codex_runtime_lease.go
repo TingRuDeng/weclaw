@@ -35,6 +35,61 @@ type codexBindingActivation struct {
 	state   CodexThreadState
 }
 
+// activateDesktopActiveWriter commits a verified Desktop writer snapshot only
+// when the owner binding observed before the history load is still current.
+// The check and activation share one registry critical section so a route or
+// runtime transition cannot be overwritten by a delayed Desktop response.
+func (r *codexRuntimeOwnerRegistry) activateDesktopActiveWriter(
+	req CodexRuntimeRequest,
+	expected *CodexThreadBinding,
+	state CodexThreadState,
+	conversationRevision uint64,
+	expectedThreadID string,
+) (CodexThreadBinding, error) {
+	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
+		return CodexThreadBinding{}, err
+	}
+	threadID := strings.TrimSpace(req.Ref.ThreadID)
+	if stateThreadID := strings.TrimSpace(state.ThreadID); stateThreadID != "" && stateThreadID != threadID {
+		return CodexThreadBinding{}, fmt.Errorf("Codex Desktop active writer thread 不一致")
+	}
+	state.ThreadID = threadID
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	conversationID := strings.TrimSpace(req.Ref.ConversationID)
+	if conversationRevision == 0 || r.conversationRevisions[conversationID] != conversationRevision ||
+		strings.TrimSpace(r.conversations[conversationID]) != strings.TrimSpace(expectedThreadID) {
+		return CodexThreadBinding{}, ErrCodexControlChanged
+	}
+	binding, ok := r.threads[threadID]
+	if !ok {
+		return binding, ErrCodexControlChanged
+	}
+	if expected != nil {
+		if binding.Runtime != expected.Runtime ||
+			binding.RuntimeGeneration != expected.RuntimeGeneration ||
+			!sameCodexControlIntent(binding.Control, expected.Control) {
+			return binding, ErrCodexControlChanged
+		}
+	}
+	if binding.Runtime == CodexRuntimeConflict {
+		return binding, ErrCodexRuntimeConflict
+	}
+	if binding.Runtime != CodexRuntimeWeClaw {
+		return binding, ErrCodexRuntimeUnavailable
+	}
+	if r.leases[threadID] != nil {
+		return binding, ErrCodexWriterBusy
+	}
+	binding = activateCodexBinding(binding, codexBindingActivation{
+		request: req, runtime: CodexRuntimeDesktop, state: state,
+	})
+	r.threads[threadID] = binding
+	r.conversations[req.Ref.ConversationID] = threadID
+	return binding, nil
+}
+
 // activateRuntime 记录已验证的用户控制意图与当前可用 writer。
 func (r *codexRuntimeOwnerRegistry) activateRuntime(req CodexRuntimeRequest, runtime CodexRuntimeHolder, state CodexThreadState) (CodexThreadBinding, error) {
 	if err := validateCodexRuntimeRequest(req); err != nil {
@@ -45,7 +100,41 @@ func (r *codexRuntimeOwnerRegistry) activateRuntime(req CodexRuntimeRequest, run
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.activateRuntimeLocked(req, runtime, state)
+}
+
+func (r *codexRuntimeOwnerRegistry) activateRuntimeAtRevision(
+	req CodexRuntimeRequest,
+	runtime CodexRuntimeHolder,
+	state CodexThreadState,
+	conversationRevision uint64,
+	expectedThreadID string,
+) (CodexThreadBinding, error) {
+	if err := validateCodexRuntimeRequest(req); err != nil {
+		return CodexThreadBinding{}, err
+	}
+	if !validCodexRuntimeHolder(runtime) {
+		return CodexThreadBinding{}, fmt.Errorf("无效的 Codex runtime %q", runtime)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.conversationBindingRevisionMatchesLocked(
+		req.Ref.ConversationID, conversationRevision, expectedThreadID,
+	) {
+		return CodexThreadBinding{}, ErrCodexControlChanged
+	}
+	return r.activateRuntimeLocked(req, runtime, state)
+}
+
+func (r *codexRuntimeOwnerRegistry) activateRuntimeLocked(
+	req CodexRuntimeRequest,
+	runtime CodexRuntimeHolder,
+	state CodexThreadState,
+) (CodexThreadBinding, error) {
 	threadID := req.Ref.ThreadID
+	if r.archivedThreads[threadID] {
+		return r.threads[threadID], ErrCodexControlChanged
+	}
 	if r.leases[threadID] != nil {
 		if !r.enforceControl {
 			binding := r.threads[threadID]
@@ -93,6 +182,9 @@ func (r *codexRuntimeOwnerRegistry) beginTurn(req CodexRuntimeRequest) (*codexWr
 	if !ok {
 		return nil, ErrCodexControlChanged
 	}
+	if r.archivedThreads[req.Ref.ThreadID] {
+		return nil, ErrCodexControlChanged
+	}
 	if r.enforceControl && !sameCodexControlIntent(binding.Control, req.Intent) {
 		return nil, ErrCodexControlChanged
 	}
@@ -136,19 +228,24 @@ func (r *codexRuntimeOwnerRegistry) hasWriterLease(threadID string) bool {
 }
 
 func (r *codexRuntimeOwnerRegistry) writerLeaseStatus(threadID string) (exists bool, uncertain bool) {
+	lease, uncertain := r.writerLeaseSnapshot(threadID)
+	return lease != nil, uncertain
+}
+
+func (r *codexRuntimeOwnerRegistry) writerLeaseSnapshot(threadID string) (*codexWriterLeaseState, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	lease := r.leases[strings.TrimSpace(threadID)]
-	return lease != nil, lease != nil && lease.uncertain
+	return lease, lease != nil && lease.uncertain
 }
 
-// bindSharedHostFrontendDuringLease refreshes one frontend from the
-// authoritative daemon without replacing the local turn lease. Another
-// frontend may already have advanced the thread to a different active turn;
-// that is valid shared-Host state, not a second writer authority.
-func (r *codexRuntimeOwnerRegistry) bindSharedHostFrontendDuringLease(
+// bindSharedHostFrontendDuringLeaseAtRevision refreshes one frontend from the
+// authoritative daemon without replacing the local turn lease.
+func (r *codexRuntimeOwnerRegistry) bindSharedHostFrontendDuringLeaseAtRevision(
 	req CodexRuntimeRequest,
 	state CodexThreadState,
+	conversationRevision uint64,
+	expectedThreadID string,
 ) (CodexThreadBinding, error) {
 	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
 		return CodexThreadBinding{}, err
@@ -161,6 +258,19 @@ func (r *codexRuntimeOwnerRegistry) bindSharedHostFrontendDuringLease(
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !r.conversationBindingRevisionMatchesLocked(
+		req.Ref.ConversationID, conversationRevision, expectedThreadID,
+	) {
+		return CodexThreadBinding{}, ErrCodexControlChanged
+	}
+	return r.bindSharedHostFrontendDuringLeaseLocked(req, state)
+}
+
+func (r *codexRuntimeOwnerRegistry) bindSharedHostFrontendDuringLeaseLocked(
+	req CodexRuntimeRequest,
+	state CodexThreadState,
+) (CodexThreadBinding, error) {
+	threadID := strings.TrimSpace(req.Ref.ThreadID)
 	binding, ok := r.threads[threadID]
 	if !ok || r.leases[threadID] == nil {
 		return binding, ErrCodexControlChanged
@@ -311,6 +421,38 @@ func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLease(req CodexR
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	lease := r.leases[req.Ref.ThreadID]
+	return r.reconcileUncertainSharedHostLeaseLocked(req, state, lease)
+}
+
+func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLeaseAtRevision(
+	req CodexRuntimeRequest,
+	state CodexThreadState,
+	expectedLease *codexWriterLeaseState,
+	conversationRevision uint64,
+	expectedThreadID string,
+) (CodexThreadBinding, bool, error) {
+	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
+		return CodexThreadBinding{}, false, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.conversationBindingRevisionMatchesLocked(
+		req.Ref.ConversationID, conversationRevision, expectedThreadID,
+	) {
+		return CodexThreadBinding{}, false, ErrCodexControlChanged
+	}
+	lease := r.leases[req.Ref.ThreadID]
+	if expectedLease == nil || lease != expectedLease || !lease.uncertain {
+		return r.threads[req.Ref.ThreadID], false, ErrCodexControlChanged
+	}
+	return r.reconcileUncertainSharedHostLeaseLocked(req, state, lease)
+}
+
+func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLeaseLocked(
+	req CodexRuntimeRequest,
+	state CodexThreadState,
+	lease *codexWriterLeaseState,
+) (CodexThreadBinding, bool, error) {
 	if lease == nil || !lease.uncertain {
 		return r.threads[req.Ref.ThreadID], false, nil
 	}
@@ -330,6 +472,10 @@ func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLease(req CodexR
 		lastTurnID != lease.baselineLastTurnID
 	if terminalMatch || authoritativeHistoryAdvanced {
 		delete(r.leases, req.Ref.ThreadID)
+		if r.archivedThreads[req.Ref.ThreadID] {
+			delete(r.threads, req.Ref.ThreadID)
+			return CodexThreadBinding{}, false, nil
+		}
 		binding := r.threads[req.Ref.ThreadID]
 		binding.Ref = req.Ref
 		binding.State = state
@@ -385,6 +531,10 @@ func (l *codexWriterLease) finish() {
 	}
 	l.state.resolvedOnce.Do(func() { close(l.state.resolvedCh) })
 	delete(r.leases, l.threadID)
+	if r.archivedThreads[l.threadID] {
+		delete(r.threads, l.threadID)
+		return
+	}
 	binding := r.threads[l.threadID]
 	if binding.Runtime != CodexRuntimeConflict {
 		activeTurnID := strings.TrimSpace(binding.State.ActiveTurnID)

@@ -611,6 +611,152 @@ func TestACPAgentUseCodexThreadValidatesWithReadWithoutSubscribing(t *testing.T)
 	}
 }
 
+func TestUseCodexThreadDoesNotRestoreBindingClearedDuringRead(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		close(readStarted)
+		<-releaseRead
+		return json.RawMessage(`{"thread":{"id":"thread-old","status":{"type":"idle"}}}`), nil
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- a.UseCodexThread(context.Background(), "conversation-1", "thread-old")
+	}()
+	<-readStarted
+	a.ClearCodexThread("conversation-1")
+	close(releaseRead)
+
+	if err := <-result; !errors.Is(err, ErrCodexControlChanged) {
+		t.Fatalf("UseCodexThread error=%v, want stale binding conflict", err)
+	}
+	if threadID, ok := a.CurrentCodexThread("conversation-1"); ok || threadID != "" {
+		t.Fatalf("binding=(%q,%t), want cleared", threadID, ok)
+	}
+	if binding, ok := a.codexOwners.currentConversationBinding("conversation-1"); ok {
+		t.Fatalf("owner binding=%#v, want cleared", binding)
+	}
+}
+
+func TestUseCodexThreadDoesNotOverwriteNewerBinding(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	oldReadStarted := make(chan struct{})
+	releaseOldRead := make(chan struct{})
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		threadID := params.(map[string]interface{})["threadId"].(string)
+		if threadID == "thread-old" {
+			close(oldReadStarted)
+			<-releaseOldRead
+		}
+		return json.RawMessage(`{"thread":{"id":"` + threadID + `","status":{"type":"idle"}}}`), nil
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- a.UseCodexThread(context.Background(), "conversation-1", "thread-old")
+	}()
+	<-oldReadStarted
+	if err := a.UseCodexThread(context.Background(), "conversation-1", "thread-new"); err != nil {
+		t.Fatalf("newer UseCodexThread: %v", err)
+	}
+	close(releaseOldRead)
+
+	if err := <-result; !errors.Is(err, ErrCodexControlChanged) {
+		t.Fatalf("older UseCodexThread error=%v, want stale binding conflict", err)
+	}
+	assertCodexConversationThread(t, a, "conversation-1", "thread-new")
+}
+
+func TestUseCodexThreadRejectsClearUseABA(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	oldReadStarted := make(chan struct{})
+	releaseOldRead := make(chan struct{})
+	var readCalls int
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		readCalls++
+		if readCalls == 1 {
+			close(oldReadStarted)
+			<-releaseOldRead
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- a.UseCodexThread(context.Background(), "conversation-1", "thread-1")
+	}()
+	<-oldReadStarted
+	a.ClearCodexThread("conversation-1")
+	if err := a.UseCodexThread(context.Background(), "conversation-1", "thread-1"); err != nil {
+		t.Fatalf("newer UseCodexThread: %v", err)
+	}
+	close(releaseOldRead)
+
+	if err := <-result; !errors.Is(err, ErrCodexControlChanged) {
+		t.Fatalf("older UseCodexThread error=%v, want ABA conflict", err)
+	}
+	assertCodexConversationThread(t, a, "conversation-1", "thread-1")
+}
+
+func TestCreateThreadDoesNotOverwriteNewerBinding(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	startCalled := make(chan struct{})
+	releaseStart := make(chan struct{})
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			close(startCalled)
+			<-releaseStart
+			return json.RawMessage(`{"thread":{"id":"thread-created"}}`), nil
+		case "thread/read":
+			threadID := params.(map[string]interface{})["threadId"].(string)
+			return json.RawMessage(`{"thread":{"id":"` + threadID + `","status":{"type":"idle"}}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+
+	type createResult struct {
+		threadID string
+		err      error
+	}
+	result := make(chan createResult, 1)
+	go func() {
+		threadID, err := a.createThread(context.Background(), "conversation-1")
+		result <- createResult{threadID: threadID, err: err}
+	}()
+	<-startCalled
+	if err := a.UseCodexThread(context.Background(), "conversation-1", "thread-new"); err != nil {
+		t.Fatalf("newer UseCodexThread: %v", err)
+	}
+	close(releaseStart)
+
+	created := <-result
+	if !errors.Is(created.err, ErrCodexControlChanged) || created.threadID != "" {
+		t.Fatalf("createThread=(%q,%v), want stale binding conflict", created.threadID, created.err)
+	}
+	assertCodexConversationThread(t, a, "conversation-1", "thread-new")
+}
+
 func TestAcceptedCodexTurnMarksCurrentConnectionSubscribed(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
 	a.mu.Lock()

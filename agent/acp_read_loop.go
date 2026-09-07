@@ -221,6 +221,7 @@ func (a *ACPAgent) dispatchCodexKnownNotification(msg rpcResponse, line string) 
 		a.handleCodexThreadArchivedNotification(msg.Params)
 		return true
 	case "thread/unarchived":
+		a.handleCodexThreadUnarchivedNotification(msg.Params)
 		return true
 	case "serverRequest/resolved":
 		a.handleCodexServerRequestResolved(msg.Params)

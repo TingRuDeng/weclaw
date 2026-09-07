@@ -91,7 +91,13 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 			return "", ErrCodexRuntimeConflict
 		}
 	}
-	if (!hasBinding || binding.Runtime != CodexRuntimeDesktop) &&
+	// A notLoaded thread may still have an active turn owned by another
+	// frontend. Calling thread/resume to establish this connection's observer
+	// would contend for that writer; authoritative polling below is sufficient
+	// until the turn reaches a terminal state.
+	knownActiveTurn := hasBinding && binding.State.Active &&
+		strings.TrimSpace(binding.State.ActiveTurnID) != ""
+	if (!hasBinding || binding.Runtime != CodexRuntimeDesktop) && !knownActiveTurn &&
 		a.codexThreadSubscriptionPending(opts.conversationID, opts.threadID) {
 		if _, err := a.SubscribeCodexThread(ctx, opts.conversationID, opts.threadID); err != nil {
 			// Subscription only improves real-time delivery. The authoritative

@@ -101,6 +101,18 @@ type codexWorkspaceSession struct {
 	UpdatedAt                      string
 }
 
+// codexPersistedControlTarget 是跨进程恢复控制所需的最小 session 快照。
+// 它只描述持久化的 route/thread 选择；active turn 仍必须由权威 Host 重新读取确认。
+type codexPersistedControlTarget struct {
+	BindingKey     string
+	RouteUserID    string
+	AgentName      string
+	ConversationID string
+	WorkspaceRoot  string
+	ThreadID       string
+	OwnerUserID    string
+}
+
 const legacyBindingDefaultPlatform = "wechat"
 
 // v14 persists a separate preparing -> ready frontend-attach transaction. Its revision is
@@ -191,6 +203,64 @@ func (s *codexSessionStore) getActiveWorkspace(bindingKey string) (string, bool)
 	defer s.mu.Unlock()
 	workspaceRoot := normalizeCodexWorkspaceRoot(s.bindings[bindingKey].ActiveWorkspace)
 	return workspaceRoot, workspaceRoot != ""
+}
+
+// controlTargetForConversation 在重启后从 durable session 恢复精确控制候选。
+// follower 若仍存在提供真实 actor；没有 follower 时只允许 route 本身可推出该 actor，
+// 避免把任意群成员误当成原任务发起人。返回的候选不代表 turn 仍 active。
+func (s *codexSessionStore) controlTargetForConversation(conversationID string, actorUserID string) (codexPersistedControlTarget, bool) {
+	conversationID = strings.TrimSpace(conversationID)
+	actorUserID = strings.TrimSpace(actorUserID)
+	if conversationID == "" || actorUserID == "" {
+		return codexPersistedControlTarget{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for bindingKey, binding := range s.bindings {
+		routeUserID := routeUserIDFromCodexBindingKey(bindingKey)
+		agentName := agentNameFromBindingKey(bindingKey)
+		if routeUserID == "" || agentName == "" {
+			continue
+		}
+		follower := normalizeCodexFrontendFollower(binding.Follower)
+		for workspaceRoot, session := range binding.Workspaces {
+			threadID := strings.TrimSpace(session.ThreadID)
+			workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+			if threadID == "" || workspaceRoot == "" || session.PendingNewThread || codexWorkspaceReleaseIntent(session) {
+				continue
+			}
+			if _, archived := s.archived[threadID]; archived {
+				continue
+			}
+			candidateConversationID := buildCodexConversationID(routeUserID, agentName, workspaceRoot)
+			if candidateConversationID != conversationID {
+				continue
+			}
+			owner := ""
+			if follower != nil && follower.WorkspaceRoot == workspaceRoot && follower.ThreadID == threadID {
+				owner = strings.TrimSpace(follower.ActorUserID)
+			}
+			if owner != "" && owner != actorUserID {
+				return codexPersistedControlTarget{}, false
+			}
+			if owner == "" && !codexRouteUserMatchesActor(routeUserID, actorUserID) {
+				return codexPersistedControlTarget{}, false
+			}
+			return codexPersistedControlTarget{
+				BindingKey: bindingKey, RouteUserID: routeUserID, AgentName: agentName,
+				ConversationID: candidateConversationID, WorkspaceRoot: workspaceRoot,
+				ThreadID: threadID, OwnerUserID: firstNonBlank(owner, actorUserID),
+			}, true
+		}
+	}
+	return codexPersistedControlTarget{}, false
+}
+
+func codexRouteUserMatchesActor(routeUserID string, actorUserID string) bool {
+	routeUserID = strings.TrimSpace(routeUserID)
+	actorUserID = strings.TrimSpace(actorUserID)
+	return routeUserID != "" && actorUserID != "" &&
+		(routeUserID == actorUserID || routeUserID == normalizeConversationUserKey(actorUserID))
 }
 
 func (s *codexSessionStore) workspaceInUse(workspaceRoot string) bool {

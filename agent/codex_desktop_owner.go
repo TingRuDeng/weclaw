@@ -6,10 +6,13 @@ import (
 )
 
 type codexRuntimeOwnerRegistry struct {
-	mu            sync.Mutex
-	threads       map[string]CodexThreadBinding
-	conversations map[string]string
-	leases        map[string]*codexWriterLeaseState
+	mu                          sync.Mutex
+	threads                     map[string]CodexThreadBinding
+	conversations               map[string]string
+	conversationRevisions       map[string]uint64
+	conversationRevisionCounter uint64
+	leases                      map[string]*codexWriterLeaseState
+	archivedThreads             map[string]bool
 	// enforceControl only exists for the retired Desktop bridge compatibility
 	// path. The shared app-server has one writer authority and does not assign
 	// exclusive ownership to individual frontend routes.
@@ -19,9 +22,12 @@ type codexRuntimeOwnerRegistry struct {
 // newCodexRuntimeOwnerRegistry 创建独立于 ACP threads map 的 owner registry。
 func newCodexRuntimeOwnerRegistry(probe codexDesktopOwnerProbe) *codexRuntimeOwnerRegistry {
 	return &codexRuntimeOwnerRegistry{
-		threads:       make(map[string]CodexThreadBinding),
-		conversations: make(map[string]string), leases: make(map[string]*codexWriterLeaseState),
-		enforceControl: probe != nil,
+		threads:               make(map[string]CodexThreadBinding),
+		conversations:         make(map[string]string),
+		conversationRevisions: make(map[string]uint64),
+		leases:                make(map[string]*codexWriterLeaseState),
+		archivedThreads:       make(map[string]bool),
+		enforceControl:        probe != nil,
 	}
 }
 
@@ -52,6 +58,35 @@ func (r *codexRuntimeOwnerRegistry) claimWeClawConversation(ref CodexThreadRef, 
 	defer r.mu.Unlock()
 	ref.ConversationID = strings.TrimSpace(ref.ConversationID)
 	ref.ThreadID = strings.TrimSpace(ref.ThreadID)
+	r.advanceConversationRevisionLocked(ref.ConversationID)
+	return r.claimWeClawConversationLocked(ref, state)
+}
+
+func (r *codexRuntimeOwnerRegistry) claimWeClawConversationAtRevision(
+	ref CodexThreadRef,
+	state CodexThreadState,
+	revision uint64,
+) (CodexThreadBinding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ref.ConversationID = strings.TrimSpace(ref.ConversationID)
+	ref.ThreadID = strings.TrimSpace(ref.ThreadID)
+	if r.conversationRevisions[ref.ConversationID] != revision {
+		return CodexThreadBinding{}, ErrCodexControlChanged
+	}
+	if r.archivedThreads[ref.ThreadID] {
+		return CodexThreadBinding{}, ErrCodexControlChanged
+	}
+	return r.claimWeClawConversationLocked(ref, state), nil
+}
+
+func (r *codexRuntimeOwnerRegistry) unarchiveThread(threadID string) {
+	r.mu.Lock()
+	delete(r.archivedThreads, strings.TrimSpace(threadID))
+	r.mu.Unlock()
+}
+
+func (r *codexRuntimeOwnerRegistry) claimWeClawConversationLocked(ref CodexThreadRef, state CodexThreadState) CodexThreadBinding {
 	current := r.threads[ref.ThreadID]
 	state.ThreadID = ref.ThreadID
 	generation := nextCodexRuntimeGeneration(current, CodexRuntimeWeClaw)
@@ -64,11 +99,16 @@ func (r *codexRuntimeOwnerRegistry) claimWeClawConversation(ref CodexThreadRef, 
 	return binding
 }
 
-// unbindConversation 删除 conversation 路由，不改变 thread 本身的 owner 证据。
-func (r *codexRuntimeOwnerRegistry) unbindConversation(conversationID string) {
+// invalidateConversationBinding advances the route revision and clears the
+// current selection in one registry critical section. The returned revision
+// can be reused by Reset to conditionally bind the replacement thread.
+func (r *codexRuntimeOwnerRegistry) invalidateConversationBinding(conversationID string) uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.conversations, strings.TrimSpace(conversationID))
+	conversationID = strings.TrimSpace(conversationID)
+	revision := r.advanceConversationRevisionLocked(conversationID)
+	delete(r.conversations, conversationID)
+	return revision
 }
 
 // markDesktopDisconnected 降级 Desktop runtime，但不改变控制意图，也不产生 release evidence。
@@ -135,9 +175,87 @@ func (r *codexRuntimeOwnerRegistry) threadBinding(threadID string) (CodexThreadB
 func (r *codexRuntimeOwnerRegistry) bindConversation(ref CodexThreadRef, binding CodexThreadBinding) CodexThreadBinding {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	ref.ConversationID = strings.TrimSpace(ref.ConversationID)
+	ref.ThreadID = strings.TrimSpace(ref.ThreadID)
+	r.advanceConversationRevisionLocked(ref.ConversationID)
 	r.conversations[ref.ConversationID] = ref.ThreadID
 	binding.Ref = ref
 	return binding
+}
+
+func (r *codexRuntimeOwnerRegistry) bindConversationAtRevision(
+	ref CodexThreadRef,
+	binding CodexThreadBinding,
+	revision uint64,
+) (CodexThreadBinding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ref.ConversationID = strings.TrimSpace(ref.ConversationID)
+	ref.ThreadID = strings.TrimSpace(ref.ThreadID)
+	if r.conversationRevisions[ref.ConversationID] != revision {
+		return binding, ErrCodexControlChanged
+	}
+	r.conversations[ref.ConversationID] = ref.ThreadID
+	binding.Ref = ref
+	return binding, nil
+}
+
+func (r *codexRuntimeOwnerRegistry) beginConversationBindingIntent(conversationID string) uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.advanceConversationRevisionLocked(strings.TrimSpace(conversationID))
+}
+
+func (r *codexRuntimeOwnerRegistry) currentConversationBindingRevision(ref CodexThreadRef) (uint64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	conversationID := strings.TrimSpace(ref.ConversationID)
+	threadID := strings.TrimSpace(ref.ThreadID)
+	if conversationID == "" || threadID == "" || strings.TrimSpace(r.conversations[conversationID]) != threadID {
+		return 0, false
+	}
+	return r.ensureConversationRevisionLocked(conversationID), true
+}
+
+func (r *codexRuntimeOwnerRegistry) conversationBindingRevisionMatches(
+	ref CodexThreadRef,
+	revision uint64,
+	expectedThreadID string,
+) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.conversationBindingRevisionMatchesLocked(
+		ref.ConversationID, revision, expectedThreadID,
+	)
+}
+
+func (r *codexRuntimeOwnerRegistry) conversationBindingRevisionMatchesLocked(
+	conversationID string,
+	revision uint64,
+	expectedThreadID string,
+) bool {
+	conversationID = strings.TrimSpace(conversationID)
+	if revision == 0 || r.conversationRevisions[conversationID] != revision {
+		return false
+	}
+	expectedThreadID = strings.TrimSpace(expectedThreadID)
+	return expectedThreadID == "" || strings.TrimSpace(r.conversations[conversationID]) == expectedThreadID
+}
+
+func (r *codexRuntimeOwnerRegistry) advanceConversationRevisionLocked(conversationID string) uint64 {
+	if conversationID == "" {
+		return 0
+	}
+	r.conversationRevisionCounter++
+	r.conversationRevisions[conversationID] = r.conversationRevisionCounter
+	return r.conversationRevisionCounter
+}
+
+func (r *codexRuntimeOwnerRegistry) ensureConversationRevisionLocked(conversationID string) uint64 {
+	if revision := r.conversationRevisions[conversationID]; revision != 0 {
+		return revision
+	}
+	return r.advanceConversationRevisionLocked(conversationID)
 }
 
 // currentConversationBinding 返回 conversation 当前选择的 thread binding。
@@ -171,6 +289,7 @@ func (r *codexRuntimeOwnerRegistry) restoreBindings(bindings map[string]CodexThr
 		}
 		r.threads[threadID] = binding
 		r.conversations[conversationID] = threadID
+		r.ensureConversationRevisionLocked(conversationID)
 		loaded++
 	}
 	return loaded

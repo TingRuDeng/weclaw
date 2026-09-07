@@ -15,7 +15,15 @@ func (a *ACPAgent) SubscribeCodexThread(ctx context.Context, conversationID stri
 	if conversationID == "" || threadID == "" || a.protocol != protocolCodexAppServer {
 		return false, nil
 	}
-	if binding, ok := a.runtimeBindingForThread(conversationID, threadID); ok {
+	// Keep topology changes and observer setup in the same admission order as
+	// write preflight: admission first, then the per-connection subscription
+	// lock. This prevents a handoff from racing a resume/fallback decision.
+	a.codexAdmissionMu.Lock()
+	defer a.codexAdmissionMu.Unlock()
+	a.codexSubscriptionMu.Lock()
+	defer a.codexSubscriptionMu.Unlock()
+	binding, bindingOK := a.runtimeBindingForThread(conversationID, threadID)
+	if bindingOK {
 		switch binding.Runtime {
 		case CodexRuntimeDesktop:
 			if a.desktopRuntime == nil {
@@ -32,19 +40,55 @@ func (a *ACPAgent) SubscribeCodexThread(ctx context.Context, conversationID stri
 			}
 		}
 	}
-	a.codexSubscriptionMu.Lock()
-	defer a.codexSubscriptionMu.Unlock()
 	a.mu.Lock()
 	subscribedEpoch, subscribed := a.codexThreadSubscriptions[threadID]
 	subscribed = subscribed && subscribedEpoch == a.wireEpoch
 	a.mu.Unlock()
 	if subscribed {
-		a.markCodexThreadSubscribed(conversationID, threadID)
+		a.markCodexThreadSubscribed(threadID)
 		return false, nil
 	}
-	if err := a.resumeThread(ctx, conversationID, threadID); err != nil {
+	// The binding was sampled before taking the subscription lock. Re-read it
+	// after serialization so a concurrent Subscribe that recovered to Desktop
+	// is observed instead of issuing a second daemon resume.
+	if current, ok := a.runtimeBindingForThread(conversationID, threadID); ok {
+		binding, bindingOK = current, true
+		switch binding.Runtime {
+		case CodexRuntimeDesktop:
+			return false, nil
+		case CodexRuntimeConflict:
+			return false, ErrCodexRuntimeConflict
+		case CodexRuntimeUnknown:
+			if !a.officialDaemonIsAuthoritativeForUnknownBinding() {
+				return false, ErrCodexRuntimeUnavailable
+			}
+		}
+	}
+	intent, ok := a.currentCodexThreadBindingIntent(CodexThreadRef{
+		ConversationID: conversationID, ThreadID: threadID,
+	})
+	if !ok {
+		return false, ErrCodexControlChanged
+	}
+	if err := a.resumeThreadWithoutSubscription(ctx, conversationID, threadID); err != nil {
+		if bindingOK && binding.Runtime == CodexRuntimeWeClaw {
+			fallbackReq := CodexRuntimeRequest{Ref: binding.Ref, Intent: binding.Control}
+			if _, recovered, recoverErr := a.recoverCodexDesktopActiveWriterExpected(
+				ctx, fallbackReq, err, &binding, intent,
+			); recoverErr != nil {
+				return true, recoverErr
+			} else if recovered {
+				// Desktop IPC owns the observer lifecycle for this thread. Do not
+				// mark this app-server connection as subscribed to the daemon.
+				return true, nil
+			}
+		}
 		return true, fmt.Errorf("订阅 Codex thread: %w", err)
 	}
+	if _, err := a.commitCodexThreadBindingIntent(intent, false, true, nil); err != nil {
+		return true, err
+	}
+	a.persistState()
 	return true, nil
 }
 
@@ -56,6 +100,10 @@ func (a *ACPAgent) UnsubscribeCodexThread(ctx context.Context, threadID string) 
 	if threadID == "" || a.protocol != protocolCodexAppServer {
 		return false, nil
 	}
+	a.codexAdmissionMu.Lock()
+	defer a.codexAdmissionMu.Unlock()
+	a.codexSubscriptionMu.Lock()
+	defer a.codexSubscriptionMu.Unlock()
 	if binding, ok := a.codexOwners.threadBinding(threadID); ok {
 		switch binding.Runtime {
 		case CodexRuntimeDesktop:
@@ -66,8 +114,6 @@ func (a *ACPAgent) UnsubscribeCodexThread(ctx context.Context, threadID string) 
 			return false, ErrCodexRuntimeConflict
 		}
 	}
-	a.codexSubscriptionMu.Lock()
-	defer a.codexSubscriptionMu.Unlock()
 	a.mu.Lock()
 	subscribedEpoch, subscribed := a.codexThreadSubscriptions[threadID]
 	currentEpoch := a.wireEpoch
@@ -83,16 +129,14 @@ func (a *ACPAgent) UnsubscribeCodexThread(ctx context.Context, threadID string) 
 	return true, nil
 }
 
-func (a *ACPAgent) markCodexThreadSubscribed(conversationID string, threadID string) {
-	a.trackCodexThreadSubscription(conversationID, threadID)
+func (a *ACPAgent) markCodexThreadSubscribed(threadID string) {
+	a.trackCodexThreadSubscription(threadID)
 	a.persistState()
 }
 
-func (a *ACPAgent) trackCodexThreadSubscription(conversationID string, threadID string) {
-	conversationID = strings.TrimSpace(conversationID)
+func (a *ACPAgent) trackCodexThreadSubscription(threadID string) {
 	threadID = strings.TrimSpace(threadID)
 	a.mu.Lock()
-	a.threads[conversationID] = threadID
 	if a.codexThreadSubscriptions == nil {
 		a.codexThreadSubscriptions = make(map[string]uint64)
 	}

@@ -48,8 +48,9 @@ func (a *ACPAgent) UseCodexThread(ctx context.Context, conversationID string, th
 	if threadID == "" {
 		return fmt.Errorf("empty thread id")
 	}
+	intent := a.beginCodexThreadBindingIntent(conversationID, threadID)
 	if a.desktopProbe != nil {
-		if handled, err := a.bindKnownDesktopThread(conversationID, threadID); handled {
+		if handled, err := a.bindKnownDesktopThread(intent); handled {
 			return err
 		}
 	}
@@ -57,32 +58,39 @@ func (a *ACPAgent) UseCodexThread(ctx context.Context, conversationID string, th
 	if err != nil {
 		return fmt.Errorf("read thread %s: %w", threadID, err)
 	}
-	if a.codexOwners != nil {
-		a.codexOwners.claimWeClawConversation(CodexThreadRef{
-			ConversationID: conversationID, ThreadID: threadID,
-		}, state)
-	}
-	a.bindCodexAppServerThreadForResume(
-		conversationID,
-		threadID,
+	_, err = a.commitCodexThreadBindingIntent(
+		intent,
 		strings.EqualFold(state.ThreadStatus, "notLoaded"),
+		false,
+		func(ownerRevision uint64) (CodexThreadBinding, error) {
+			return a.codexOwners.claimWeClawConversationAtRevision(intent.ref, state, ownerRevision)
+		},
 	)
+	if err != nil {
+		return err
+	}
+	a.persistState()
 	return nil
 }
 
 // bindKnownDesktopThread 防止旧入口通过 app-server 抢占 Desktop 正在持有的 thread。
-func (a *ACPAgent) bindKnownDesktopThread(conversationID string, threadID string) (bool, error) {
+func (a *ACPAgent) bindKnownDesktopThread(intent codexThreadBindingIntent) (bool, error) {
 	if a.codexOwners == nil {
 		return false, nil
 	}
-	binding, ok := a.codexOwners.threadBinding(threadID)
+	binding, ok := a.codexOwners.threadBinding(intent.ref.ThreadID)
 	if !ok || binding.Runtime != CodexRuntimeDesktop {
 		return false, nil
 	}
-	a.codexOwners.bindConversation(CodexThreadRef{
-		ConversationID: conversationID,
-		ThreadID:       threadID,
-	}, binding)
+	_, err := a.commitCodexThreadBindingIntent(
+		intent, false, false,
+		func(ownerRevision uint64) (CodexThreadBinding, error) {
+			return a.codexOwners.bindConversationAtRevision(intent.ref, binding, ownerRevision)
+		},
+	)
+	if err != nil {
+		return true, err
+	}
 	a.persistState()
 	return true, nil
 }
@@ -119,6 +127,15 @@ func (a *ACPAgent) requireThread(ctx context.Context, conversationID string) (st
 
 // createThread 创建并保存一个由用户显式请求的新 Codex thread。
 func (a *ACPAgent) createThread(ctx context.Context, conversationID string) (string, error) {
+	intent := a.beginCodexThreadBindingIntent(conversationID, "")
+	return a.createThreadWithIntent(ctx, conversationID, intent)
+}
+
+func (a *ACPAgent) createThreadWithIntent(
+	ctx context.Context,
+	conversationID string,
+	intent codexThreadBindingIntent,
+) (string, error) {
 	params := a.codexThreadStartParams(ctx, conversationID)
 	startedAt := time.Now()
 	result, sequence, err := a.rpcWithSequence(ctx, "thread/start", params)
@@ -133,24 +150,23 @@ func (a *ACPAgent) createThread(ctx context.Context, conversationID string) (str
 	if err != nil {
 		return "", err
 	}
+	intent.ref.ThreadID = threadID
 	a.cacheCodexThreadConfigFromLifecycleResult(result, threadID, CodexThreadConfig{
 		Model:            stringMapValue(params, "model"),
 		Effort:           stringMapValue(params, "effort"),
 		ServiceTier:      stringMapValue(params, "serviceTier"),
 		ServiceTierKnown: mapHasKey(params, "serviceTier"),
 	}, sequence)
-	a.mu.Lock()
-	a.threads[conversationID] = threadID
-	delete(a.resumeOnFirstUse, conversationID)
-	if a.codexThreadSubscriptions == nil {
-		a.codexThreadSubscriptions = make(map[string]uint64)
-	}
-	a.codexThreadSubscriptions[threadID] = a.wireEpoch
-	a.mu.Unlock()
-	if a.codexOwners != nil {
-		a.codexOwners.claimWeClawConversation(CodexThreadRef{
-			ConversationID: conversationID, ThreadID: threadID,
-		}, CodexThreadState{ThreadID: threadID})
+	_, err = a.commitCodexThreadBindingIntent(
+		intent, false, true,
+		func(ownerRevision uint64) (CodexThreadBinding, error) {
+			return a.codexOwners.claimWeClawConversationAtRevision(
+				intent.ref, CodexThreadState{ThreadID: threadID}, ownerRevision,
+			)
+		},
+	)
+	if err != nil {
+		return "", err
 	}
 	a.persistState()
 	return threadID, nil
@@ -202,10 +218,28 @@ func codexThreadIDFromStartResult(result json.RawMessage) (string, error) {
 }
 
 func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, threadID string) error {
-	return a.resumeThreadWithProvider(ctx, conversationID, threadID, a.codexThreadProvider(threadID))
+	return a.resumeThreadWithProviderTracking(
+		ctx, conversationID, threadID, a.codexThreadProvider(threadID), true,
+	)
 }
 
 func (a *ACPAgent) resumeThreadWithProvider(ctx context.Context, conversationID string, threadID string, provider string) error {
+	return a.resumeThreadWithProviderTracking(ctx, conversationID, threadID, provider, true)
+}
+
+func (a *ACPAgent) resumeThreadWithoutSubscription(ctx context.Context, conversationID string, threadID string) error {
+	return a.resumeThreadWithProviderTracking(
+		ctx, conversationID, threadID, a.codexThreadProvider(threadID), false,
+	)
+}
+
+func (a *ACPAgent) resumeThreadWithProviderTracking(
+	ctx context.Context,
+	conversationID string,
+	threadID string,
+	provider string,
+	trackSubscription bool,
+) error {
 	if threadID == "" {
 		return fmt.Errorf("empty thread id")
 	}
@@ -259,7 +293,9 @@ func (a *ACPAgent) resumeThreadWithProvider(ctx context.Context, conversationID 
 	if provider != "" && returnedProvider != provider {
 		return fmt.Errorf("thread/resume provider mismatch (requested=%s, returned=%s)", provider, returnedProvider)
 	}
-	a.markCodexThreadSubscribed(conversationID, threadID)
+	if trackSubscription {
+		a.markCodexThreadSubscribed(threadID)
+	}
 	return nil
 }
 

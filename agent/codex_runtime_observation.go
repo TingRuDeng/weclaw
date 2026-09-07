@@ -15,6 +15,9 @@ type codexDesktopLeaseObservation struct {
 
 func (r *codexRuntimeOwnerRegistry) observeDesktopSnapshotLocked(threadID string, _ uint64, state CodexThreadState) CodexThreadBinding {
 	current := r.threads[threadID]
+	if r.archivedThreads[threadID] && r.leases[threadID] == nil {
+		return current
+	}
 	state.ThreadID = threadID
 	if lease := r.leases[threadID]; lease != nil {
 		return r.observeDesktopLeaseLocked(codexDesktopLeaseObservation{
@@ -89,8 +92,31 @@ func (r *codexRuntimeOwnerRegistry) markConflictLocked(threadID string, reason s
 func (r *codexRuntimeOwnerRegistry) markRuntimeConflict(req CodexRuntimeRequest, reason string) (CodexThreadBinding, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.markRuntimeConflictLocked(req, reason)
+}
+
+func (r *codexRuntimeOwnerRegistry) markRuntimeConflictAtRevision(
+	req CodexRuntimeRequest,
+	reason string,
+	conversationRevision uint64,
+	expectedThreadID string,
+) (CodexThreadBinding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.conversationBindingRevisionMatchesLocked(
+		req.Ref.ConversationID, conversationRevision, expectedThreadID,
+	) {
+		return CodexThreadBinding{}, ErrCodexControlChanged
+	}
+	return r.markRuntimeConflictLocked(req, reason)
+}
+
+func (r *codexRuntimeOwnerRegistry) markRuntimeConflictLocked(req CodexRuntimeRequest, reason string) (CodexThreadBinding, error) {
 	threadID := strings.TrimSpace(req.Ref.ThreadID)
 	binding := r.threads[threadID]
+	if r.archivedThreads[threadID] {
+		return binding, ErrCodexControlChanged
+	}
 	if codexControlIntentEstablished(binding.Control) {
 		if binding.Control.Revision > req.Intent.Revision ||
 			(binding.Control.Revision == req.Intent.Revision && !sameCodexControlIntent(binding.Control, req.Intent)) {

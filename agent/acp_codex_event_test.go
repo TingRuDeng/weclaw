@@ -599,13 +599,13 @@ func TestACPAgentKeepsCodexThreadWhenResumeReportsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	threadStarts := 0
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method == "thread/start" {
-			threadStarts++
-		}
-		if method == "thread/resume" {
-			return nil, fmt.Errorf("thread not found")
-		}
+		a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+			if method == "thread/start" {
+				threadStarts++
+			}
+			if method == "thread/resume" || method == "thread/turns/list" {
+				return nil, fmt.Errorf("thread not found")
+			}
 		if method == "thread/read" {
 			return json.RawMessage(`{"thread":{"id":"old-thread","status":{"type":"notLoaded"}}}`), nil
 		}

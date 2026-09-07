@@ -106,7 +106,7 @@ func TestCodexStatusShowsSessionName(t *testing.T) {
 	if !strings.Contains(text, "会话: 修复审批体验") {
 		t.Fatalf("status should show session name, messages=%#v", calls.texts())
 	}
-	if strings.Contains(text, "thread: thread-1") {
-		t.Fatalf("status should not show raw thread id, messages=%#v", calls.texts())
+	if !strings.Contains(text, "thread: thread-1") {
+		t.Fatalf("status should show exact thread id, messages=%#v", calls.texts())
 	}
 }
