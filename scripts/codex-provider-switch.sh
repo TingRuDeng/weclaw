@@ -6,8 +6,8 @@ umask 077
 usage() {
   cat <<'EOF'
 用法:
-  codex-provider-switch.sh <openai|OpenAI> [--repair-item-ids] [--apply] [--codex-home PATH]
-  codex-provider-switch.sh --restore BACKUP_DIR [--apply] [--codex-home PATH]
+  codex-provider-switch.sh <openai|OpenAI> [--repair-item-ids] [--apply] [--codex-home PATH] [--sqlite-home PATH]
+  codex-provider-switch.sh --restore BACKUP_DIR [--apply] [--codex-home PATH] [--sqlite-home PATH]
 
 默认只做只读预览；只有显式传入 --apply 才会写入。
 归档会话不会切换 provider，也不会修复历史 item ID。
@@ -16,12 +16,17 @@ usage() {
   --repair-item-ids  将已知 Responses 类型的错误 item_ 前缀改为类型专用前缀
   --apply            执行写入；省略时只预览
   --codex-home PATH  指定 Codex 数据目录，默认使用 CODEX_HOME 或 ~/.codex
+  --sqlite-home PATH 指定会话数据库目录，默认使用 CODEX_SQLITE_HOME 或 Codex 数据目录
   --restore DIR      预览或恢复本脚本生成的备份目录
+
+共享 Host 的数据库可能位于 Codex 数据目录之外；执行前请核对预览中的 state_database。
+config.toml 的 sqlite_home 或 Host 专属覆盖请通过 --sqlite-home 显式指定。
 EOF
 }
 
 target_provider=""
 target_home="${CODEX_HOME:-${HOME}/.codex}"
+target_sqlite_home="${CODEX_SQLITE_HOME:-}"
 apply_mode="false"
 repair_item_ids="false"
 restore_dir=""
@@ -61,6 +66,14 @@ while [[ $# -gt 0 ]]; do
       restore_dir="$2"
       shift 2
       ;;
+    --sqlite-home)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "错误：--sqlite-home 必须跟一个路径" >&2
+        exit 2
+      fi
+      target_sqlite_home="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -89,7 +102,9 @@ command -v python3 >/dev/null 2>&1 || {
   exit 1
 }
 
-python3 - "${target_home}" "${target_provider}" "${apply_mode}" "${repair_item_ids}" "${restore_dir}" <<'PY'
+python3 - "${target_home}" "${target_provider}" "${apply_mode}" "${repair_item_ids}" "${restore_dir}" "${target_sqlite_home}" <<'PY'
+from __future__ import annotations
+
 import hashlib
 import json
 import os
@@ -450,9 +465,10 @@ def assert_no_open_files(home: pathlib.Path, targets: list[pathlib.Path]) -> Non
         detail = process_result.stderr.strip() or f"exit status {process_result.returncode}"
         fail(f"process writer check failed: {detail}")
     active_pids: list[str] = []
-    home_variants = {str(home)}
-    if str(home).startswith("/private/"):
-        home_variants.add(str(home)[len("/private") :])
+    home_variants = {str(home), str(state_path.parent)}
+    home_variants.update(
+        value[len("/private") :] for value in list(home_variants) if value.startswith("/private/")
+    )
     for raw_line in process_result.stdout.splitlines():
         stripped = raw_line.strip()
         if not stripped:
@@ -465,6 +481,7 @@ def assert_no_open_files(home: pathlib.Path, targets: list[pathlib.Path]) -> Non
         is_writer_process = bool(
             re.search(r"(?:^|/)codex(?:\s|$)", normalized_command)
             or "/Codex.app/Contents/MacOS/Codex" in normalized_command
+            or "/ChatGPT.app/Contents/MacOS/ChatGPT" in normalized_command
             or re.search(r"(?:^|/)weclaw\s+(?:start|restart|codex)(?:\s|$)", normalized_command)
         )
         if not is_writer_process:
@@ -482,7 +499,7 @@ def assert_no_open_files(home: pathlib.Path, targets: list[pathlib.Path]) -> Non
         fail("lsof is required for --apply so active Codex writers can be detected")
     inspected_paths = list(targets)
     for target in targets:
-        if target.suffix == ".sqlite":
+        if target.suffix in (".sqlite", ".db"):
             inspected_paths.extend(
                 pathlib.Path(f"{target}{suffix}") for suffix in ("-wal", "-shm")
             )
@@ -509,15 +526,26 @@ def ensure_disk_space(home: pathlib.Path, files: list[pathlib.Path]) -> None:
         fail(
             f"insufficient free disk space: need {required_bytes} bytes, have {free_bytes} bytes"
         )
+    # Replacement is staged beside the destination, which may be on another volume.
+    for path in files:
+        if shutil.disk_usage(path.parent).free < path.stat().st_size:
+            fail(f"insufficient free disk space for replacement: {path}")
+
+
+def store_relative_path(home: pathlib.Path, path: pathlib.Path) -> pathlib.Path:
+    # Keep a stable logical backup name even when the state DB lives outside CODEX_HOME.
+    if path == state_path:
+        return pathlib.Path("state_5.sqlite")
+    return path.relative_to(home)
 
 
 def assert_owned_file_inside_home(home: pathlib.Path, path: pathlib.Path) -> None:
     if path.is_symlink() or not path.is_file():
         fail(f"target must be a regular file: {path}")
     try:
-        path.resolve().relative_to(home)
+        path.resolve().relative_to(state_path.parent if path == state_path else home)
     except ValueError:
-        fail(f"target resolves outside Codex home: {path}")
+        fail(f"target resolves outside its configured store: {path}")
     if path.stat().st_uid != os.getuid():
         fail(f"target must be owned by the current user: {path}")
 
@@ -539,7 +567,7 @@ def make_backup(
     backup_dir.mkdir(mode=0o700)
     entries: list[dict[str, object]] = []
     for source in files:
-        relative = source.relative_to(home)
+        relative = store_relative_path(home, source)
         destination = backup_dir / relative
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if source.suffix in (".sqlite", ".db"):
@@ -560,11 +588,12 @@ def make_backup(
         )
     manifest = {
         "tool": "codex-provider-switch",
-        "version": 1,
+        "version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "operation": operation,
         "target_provider": provider,
         "codex_home": str(home),
+        "sqlite_home": str(state_path.parent),
         "backup_verified": True,
         "files": entries,
     }
@@ -680,12 +709,12 @@ def apply_switch(
         for source, table, count in database_plans:
             if not count:
                 continue
-            staged = stage_root / source.relative_to(home)
+            staged = stage_root / store_relative_path(home, source)
             staged.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             stage_sqlite_update(source, staged, table, provider, archived_thread_ids)
             replacements.append((staged, source, stat.S_IMODE(source.stat().st_mode), True))
         for source, content in rollout_plans.items():
-            staged = stage_root / source.relative_to(home)
+            staged = stage_root / store_relative_path(home, source)
             mode = stat.S_IMODE(source.stat().st_mode)
             write_staged_file(staged, content, mode)
             replacements.append((staged, source, mode, False))
@@ -693,7 +722,7 @@ def apply_switch(
         manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
         manifest_entries = {entry["path"]: entry for entry in manifest["files"]}
         for _, destination, _, _ in replacements:
-            relative = destination.relative_to(home).as_posix()
+            relative = store_relative_path(home, destination).as_posix()
             expected = manifest_entries[relative]["source_sha256"]
             if sha256_file(destination) != expected:
                 fail(f"source changed after backup; refusing to apply: {destination}")
@@ -716,7 +745,7 @@ def apply_switch(
                     fail(f"rollout verification failed after apply: {path}")
         except BaseException:
             for destination in reversed(replaced):
-                relative = destination.relative_to(home)
+                relative = store_relative_path(home, destination)
                 entry = manifest_entries[relative.as_posix()]
                 replace_from_file(
                     backup_dir / relative,
@@ -777,12 +806,17 @@ def load_restore_manifest(
         fail(f"cannot read backup manifest {manifest_path}: {exc}")
     if not isinstance(manifest, dict):
         fail("backup manifest must be a JSON object")
-    if manifest.get("tool") != "codex-provider-switch" or manifest.get("version") != 1:
+    if manifest.get("tool") != "codex-provider-switch" or manifest.get("version") not in (1, 2):
         fail("backup manifest was not created by this script version")
     if manifest.get("codex_home") != str(home):
         fail(
             f"backup belongs to a different Codex home: {manifest.get('codex_home')!r}"
         )
+    # A manifest must never grant access to a new external path. The caller must
+    # select the same state namespace explicitly or via CODEX_SQLITE_HOME.
+    backup_sqlite_home = manifest.get("sqlite_home") if manifest.get("version") == 2 else str(home)
+    if backup_sqlite_home != str(state_path.parent):
+        fail("backup belongs to a different SQLite home; select its original --sqlite-home")
     entries = manifest.get("files")
     if not isinstance(entries, list) or not entries:
         fail("backup manifest contains no files")
@@ -814,7 +848,7 @@ def load_restore_manifest(
         ):
             fail(f"unsupported restore target: {relative_text}")
         backup_file = backup_dir.joinpath(*relative.parts)
-        destination = home.joinpath(*relative.parts)
+        destination = state_path if relative_text == "state_5.sqlite" else home.joinpath(*relative.parts)
         if backup_file.is_symlink() or not backup_file.is_file():
             fail(f"backup file is missing or unsafe: {backup_file}")
         if destination.is_symlink() or not destination.is_file():
@@ -863,7 +897,7 @@ def restore_backup(
     safety_entries = {entry["path"]: entry for entry in safety_manifest["files"]}
 
     for _, destination, _ in entries:
-        relative = destination.relative_to(home).as_posix()
+        relative = store_relative_path(home, destination).as_posix()
         if sha256_file(destination) != safety_entries[relative]["source_sha256"]:
             fail(f"restore destination changed after safety backup: {destination}")
     assert_no_open_files(home, destinations)
@@ -893,7 +927,7 @@ def restore_backup(
                 validate_jsonl(destination)
     except BaseException:
         for destination in reversed(replaced):
-            relative = destination.relative_to(home)
+            relative = store_relative_path(home, destination)
             entry = safety_entries[relative.as_posix()]
             replace_from_file(
                 safety_backup / relative,
@@ -916,14 +950,19 @@ provider = sys.argv[2]
 apply = sys.argv[3] == "true"
 repair = sys.argv[4] == "true"
 restore = sys.argv[5]
+sqlite_home = pathlib.Path(sys.argv[6]).expanduser().resolve() if sys.argv[6] else home
+state_path = sqlite_home / "state_5.sqlite"
 
 if not home.is_dir():
     fail(f"Codex home does not exist or is not a directory: {home}")
+if not sqlite_home.is_dir():
+    fail(f"SQLite home does not exist or is not a directory: {sqlite_home}")
 
 if restore:
     restore_source, _, restore_entries = load_restore_manifest(restore, home)
     print(f"mode={'apply' if apply else 'dry-run'}")
     print(f"codex_home={home}")
+    print(f"state_database={state_path}")
     print(f"restore_source={restore_source}")
     print(f"restore_files={len(restore_entries)}")
     if apply:
@@ -932,7 +971,6 @@ if restore:
         print(f"safety_backup_dir={safety_backup}")
     raise SystemExit(0)
 
-state_path = home / "state_5.sqlite"
 catalog_path = home / "sqlite" / "codex-dev.db"
 archived_thread_ids = read_archived_thread_ids(state_path)
 state_rows = count_sqlite_changes(
@@ -955,6 +993,7 @@ catalog_rows = count_sqlite_changes(
 
 print(f"mode={'apply' if apply else 'dry-run'}")
 print(f"codex_home={home}")
+print(f"state_database={state_path}")
 print(f"target_provider={provider}")
 print(f"state_rows={state_rows}")
 print(f"catalog_rows={catalog_rows}")

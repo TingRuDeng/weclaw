@@ -2,9 +2,13 @@
 
 set -euo pipefail
 
+# Fixtures must never inherit the real Host's separate SQLite namespace.
+unset CODEX_SQLITE_HOME
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 switch_script="${script_dir}/codex-provider-switch.sh"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/codex-provider-switch-test.XXXXXX")"
+test_root="$(cd "${test_root}" && pwd -P)"
 
 cleanup() {
   rm -rf "${test_root}"
@@ -245,7 +249,7 @@ if references != ["fc_function"]:
 manifest = json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
 if (
     manifest.get("tool") != "codex-provider-switch"
-    or manifest.get("version") != 1
+    or manifest.get("version") != 2
     or manifest.get("backup_verified") is not True
 ):
     raise SystemExit("backup manifest identity is invalid")
@@ -712,6 +716,108 @@ if rows != expected:
 PY
 }
 
+test_separate_sqlite_home_switch_and_restore() {
+  local codex_home="${test_root}/separate-home"
+  local sqlite_home="${test_root}/separate-state"
+  local before
+  local output
+  local backup_dir
+
+  create_fixture "${codex_home}"
+  mkdir -p "${sqlite_home}"
+  cp "${codex_home}/state_5.sqlite" "${sqlite_home}/state_5.sqlite"
+  before="$(fixture_snapshot "${test_root}")"
+  output="$(CODEX_SQLITE_HOME="${sqlite_home}" "${switch_script}" openai --codex-home "${codex_home}")"
+  assert_contains "${output}" "state_database=${sqlite_home}/state_5.sqlite"
+  assert_contains "${output}" "state_rows=1"
+  [[ "$(fixture_snapshot "${test_root}")" == "${before}" ]] || fail "separate-store preview wrote files"
+
+  output="$(CODEX_SQLITE_HOME="${sqlite_home}" "${switch_script}" openai --apply --codex-home "${codex_home}")"
+  assert_contains "${output}" "status=applied"
+  backup_dir="$(printf '%s\n' "${output}" | sed -n 's/^backup_dir=//p')"
+  python3 - "${codex_home}" "${sqlite_home}" "${backup_dir}" <<'PY'
+import json
+import pathlib
+import sqlite3
+import sys
+
+home, state_home, backup = map(pathlib.Path, sys.argv[1:])
+for path, expected in (
+    (home / "state_5.sqlite", "OpenAI"),
+    (state_home / "state_5.sqlite", "openai"),
+    (backup / "state_5.sqlite", "OpenAI"),
+):
+    connection = sqlite3.connect(path)
+    providers = dict(connection.execute("SELECT id, model_provider FROM threads"))
+    connection.close()
+    assert providers == {"thread-current": expected, "thread-archived": "OpenAI"}, (path, providers)
+manifest = json.loads((backup / "manifest.json").read_text())
+assert manifest["version"] == 2
+assert manifest["sqlite_home"] == str(state_home)
+assert "state_5.sqlite" in {entry["path"] for entry in manifest["files"]}
+assert all(not pathlib.Path(entry["path"]).is_absolute() for entry in manifest["files"])
+PY
+
+  output="$("${switch_script}" openai --apply --codex-home "${codex_home}" --sqlite-home "${sqlite_home}")"
+  assert_contains "${output}" "status=no-changes"
+  before="$(fixture_snapshot "${test_root}")"
+  if "${switch_script}" --restore "${backup_dir}" --apply --codex-home "${codex_home}" >"${test_root}/wrong-store-output" 2>&1; then
+    fail "restore accepted a different SQLite namespace"
+  fi
+  output="$(cat "${test_root}/wrong-store-output")"
+  rm "${test_root}/wrong-store-output"
+  assert_contains "${output}" "different SQLite home"
+  [[ "$(fixture_snapshot "${test_root}")" == "${before}" ]] || fail "wrong-store restore wrote files"
+
+  output="$("${switch_script}" --restore "${backup_dir}" --apply --codex-home "${codex_home}" --sqlite-home "${sqlite_home}")"
+  assert_contains "${output}" "status=restored"
+  python3 - "${sqlite_home}/state_5.sqlite" <<'PY'
+import sqlite3
+import sys
+connection = sqlite3.connect(sys.argv[1])
+assert {row[0] for row in connection.execute("SELECT model_provider FROM threads")} == {"OpenAI"}
+connection.close()
+PY
+}
+
+test_sqlite_home_override_without_legacy_database() {
+  local codex_home="${test_root}/override-home"
+  local sqlite_home="${test_root}/override-state"
+  local output
+  create_fixture "${codex_home}"
+  mkdir -p "${sqlite_home}"
+  mv "${codex_home}/state_5.sqlite" "${sqlite_home}/state_5.sqlite"
+  output="$(CODEX_SQLITE_HOME="${test_root}/missing" "${switch_script}" openai --apply --codex-home "${codex_home}" --sqlite-home "${sqlite_home}")"
+  assert_contains "${output}" "state_database=${sqlite_home}/state_5.sqlite"
+  assert_contains "${output}" "status=applied"
+  [[ ! -e "${codex_home}/state_5.sqlite" ]] || fail "created a legacy database"
+  if CODEX_SQLITE_HOME="${test_root}/missing" "${switch_script}" openai --codex-home "${codex_home}" >"${test_root}/missing-store-output" 2>&1; then
+    fail "missing SQLite home silently fell back"
+  fi
+  assert_contains "$(cat "${test_root}/missing-store-output")" "SQLite home does not exist"
+}
+
+test_legacy_backup_restore() {
+  local codex_home="${test_root}/legacy-backup-home"
+  local output
+  local backup_dir
+  create_fixture "${codex_home}"
+  output="$("${switch_script}" openai --apply --codex-home "${codex_home}")"
+  backup_dir="$(printf '%s\n' "${output}" | sed -n 's/^backup_dir=//p')"
+  python3 - "${backup_dir}/manifest.json" <<'PY'
+import json
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+manifest = json.loads(path.read_text())
+manifest["version"] = 1
+manifest.pop("sqlite_home")
+path.write_text(json.dumps(manifest))
+PY
+  output="$("${switch_script}" --restore "${backup_dir}" --apply --codex-home "${codex_home}")"
+  assert_contains "${output}" "status=restored"
+}
+
 test_dry_run_reports_changes_without_writing
 echo "PASS: dry-run reports planned changes without writing"
 test_apply_updates_all_stores_and_repairs_ids
@@ -742,3 +848,9 @@ test_restore_rejects_manifest_targets_outside_codex_stores
 echo "PASS: restore rejects targets outside the Codex stores"
 test_apply_updates_only_sqlite_rows_that_need_switching
 echo "PASS: apply updates only SQLite rows that need switching"
+test_separate_sqlite_home_switch_and_restore
+echo "PASS: separate SQLite home switches, preserves legacy state, and restores safely"
+test_sqlite_home_override_without_legacy_database
+echo "PASS: explicit SQLite home overrides the environment without a legacy database"
+test_legacy_backup_restore
+echo "PASS: version 1 backups remain restorable"
