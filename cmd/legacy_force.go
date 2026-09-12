@@ -45,10 +45,10 @@ func forceLegacyRuntime(ctx context.Context, cfg *config.Config, cause error, st
 		return fmt.Errorf("无法开始强制迁移，请先退出受控 weclaw codex cli: %w", err)
 	}
 	defer lease.Close()
-	return forceLegacyRuntimeWithLease(ctx, cfg, cause, start, configuredLegacyCodexController)
+	return forceLegacyRuntimeWithLease(ctx, cfg, cause, start, configuredLegacyCodexController, legacyServiceUsesSystemd)
 }
 
-func forceLegacyRuntimeWithLease(ctx context.Context, cfg *config.Config, cause error, start func(bool) error, selectController func(context.Context, *config.Config) (legacyCodexController, error)) (resultErr error) {
+func forceLegacyRuntimeWithLease(ctx context.Context, cfg *config.Config, cause error, start func(bool) error, selectController func(context.Context, *config.Config) (legacyCodexController, error), inspectSystemd func(runtimeState, legacyProcessIdentity) (bool, error)) (resultErr error) {
 	if cfg == nil {
 		return fmt.Errorf("强制迁移缺少配置")
 	}
@@ -72,7 +72,7 @@ func forceLegacyRuntimeWithLease(ctx context.Context, cfg *config.Config, cause 
 		if !errors.As(cause, &legacy) {
 			return fmt.Errorf("强制迁移缺少旧服务身份快照: %w", cause)
 		}
-		target, err = captureLegacyService(legacy.state)
+		target, err = captureLegacyService(legacy.state, inspectSystemd)
 		if err != nil {
 			return err
 		}

@@ -105,9 +105,22 @@ func TestLegacyForceStopsIsolated404Service(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lease.Close()
-	// 只替换 Codex 边界，进程核验、真实信号、运行锁与 journal 均走正式实现。
+	// 夹具由本测试直接管理，不能继承 CI runner 所在的 systemd unit。
+	// 仅隔离 Codex 和服务管理器边界，进程核验、信号、运行锁和 journal 仍走正式实现。
 	noCodex := func(context.Context, *config.Config) (legacyCodexController, error) { return nil, nil }
-	if err := forceLegacyRuntimeWithLease(context.Background(), cfg, cause, nil, noCodex); err != nil {
+	unknownManager := errors.New("无法核实夹具的服务管理器")
+	rejectManager := func(runtimeState, legacyProcessIdentity) (bool, error) { return false, unknownManager }
+	if err := forceLegacyRuntimeWithLease(context.Background(), cfg, cause, nil, noCodex, rejectManager); !errors.Is(err, unknownManager) {
+		t.Fatalf("服务管理器检查错误未保留：%v", err)
+	}
+	if !processExists(child.Process.Pid) {
+		t.Fatal("服务管理器检查失败不应停止夹具")
+	}
+	if pending, err := messaging.RuntimeRestartPending(); err != nil || pending {
+		t.Fatalf("服务管理器检查失败不应写入 journal：pending=%v err=%v", pending, err)
+	}
+	fixtureManager := func(runtimeState, legacyProcessIdentity) (bool, error) { return false, nil }
+	if err := forceLegacyRuntimeWithLease(context.Background(), cfg, cause, nil, noCodex, fixtureManager); err != nil {
 		t.Fatal(err)
 	}
 	if processExists(child.Process.Pid) {
@@ -117,7 +130,7 @@ func TestLegacyForceStopsIsolated404Service(t *testing.T) {
 		t.Fatalf("pending=%v err=%v", pending, err)
 	}
 	// 新的离线 force 可以重入；普通启动通过恢复器消费已完成的停止记录。
-	if err := forceLegacyRuntimeWithLease(context.Background(), cfg, nil, nil, noCodex); err != nil {
+	if err := forceLegacyRuntimeWithLease(context.Background(), cfg, nil, nil, noCodex, fixtureManager); err != nil {
 		t.Fatal(err)
 	}
 	if err := messaging.NewHandler(nil, nil).RecoverRuntimeRestart(context.Background()); err != nil {
@@ -171,7 +184,7 @@ func TestLegacyForceOfflineRetryUsesRecordedSystemd(t *testing.T) {
 			t.Fatal("systemd 重试不应启动私有 daemon")
 		}
 		return want
-	}, func(context.Context, *config.Config) (legacyCodexController, error) { return nil, nil })
+	}, func(context.Context, *config.Config) (legacyCodexController, error) { return nil, nil }, legacyServiceUsesSystemd)
 	if !errors.Is(err, want) || !errors.Is(err, messaging.ErrOfflineRuntimeRestartIncomplete) {
 		t.Fatalf("err=%v", err)
 	}
@@ -195,7 +208,7 @@ func TestLegacyForceRechecksMissingCodexConfigAfterServiceExit(t *testing.T) {
 			return nil, want
 		}
 		return nil, nil
-	})
+	}, legacyServiceUsesSystemd)
 	if !errors.Is(err, want) || !errors.Is(err, messaging.ErrOfflineRuntimeRestartIncomplete) {
 		t.Fatalf("err=%v", err)
 	}

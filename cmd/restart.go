@@ -153,7 +153,7 @@ func compensateRestartDrain(
 
 func ensureOfflineCodexRestartSafe(cfg *config.Config, force bool) error {
 	if force {
-		return forceLegacyRuntimeWithLease(context.Background(), cfg, nil, nil, configuredLegacyCodexController)
+		return forceLegacyRuntimeWithLease(context.Background(), cfg, nil, nil, configuredLegacyCodexController, legacyServiceUsesSystemd)
 	}
 	configured := false
 	for _, candidate := range cfg.Agents {

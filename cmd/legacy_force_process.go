@@ -29,7 +29,7 @@ func legacyArgsFingerprint(args []string) [32]byte {
 	return sha256.Sum256([]byte(strings.Join(args, "\x00")))
 }
 
-func captureLegacyService(state runtimeState) (*legacyServiceTarget, error) {
+func captureLegacyService(state runtimeState, inspectSystemd func(runtimeState, legacyProcessIdentity) (bool, error)) (*legacyServiceTarget, error) {
 	current, err := readRuntimeState()
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func captureLegacyService(state runtimeState) (*legacyServiceTarget, error) {
 	if err := validateLegacyServiceIdentity(state, identity, args); err != nil {
 		return nil, err
 	}
-	systemd, err := legacyServiceUsesSystemd(state, identity)
+	systemd, err := inspectSystemd(state, identity)
 	if err != nil {
 		return nil, err
 	}
