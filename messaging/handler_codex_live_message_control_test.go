@@ -63,6 +63,38 @@ func TestCodexDesktopActiveMessageSteersCurrentTurn(t *testing.T) {
 	}
 }
 
+func TestCodexFeishuActiveMessageOffersTaskControls(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, true)
+	opts.platform = platform.PlatformFeishu
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	opts.reply = reply
+	active, _, _ := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
+		owner: opts.userID, routeUserID: opts.routeUserID, agentName: opts.agentName,
+		codexThreadID: route.threadID,
+	})
+	t.Cleanup(active.cancel)
+	h.startCodexAgentTask(opts)
+	waitUntil(t, func() bool { return len(reply.Choices) > 0 })
+	if _, _, message := ag.steerSnapshot(); message != "" {
+		t.Fatalf("Feishu active input should wait for explicit control, steered %q", message)
+	}
+	choices := reply.Choices[0].Choices
+	ids := map[string]bool{}
+	for _, choice := range choices {
+		ids[choice.ID] = true
+	}
+	for _, id := range []string{"/guide", "/cancel", "/stop"} {
+		if !ids[id] {
+			t.Fatalf("choices=%#v, missing %s", choices, id)
+		}
+	}
+	task, _ := h.activeTask(route.conversationID)
+	if task == nil || task.pendingGuide() != "继续任务" {
+		t.Fatalf("pending=%v, want queued Feishu input", task)
+	}
+	task.cancel()
+}
+
 func TestCodexDesktopActiveMessageClaimsStableFollowerTerminalDelivery(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, true)
 	ag.watchDone = make(chan struct{})

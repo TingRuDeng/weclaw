@@ -87,10 +87,6 @@ func TestInactiveThreadLoggingSuppressesNonControlNoise(t *testing.T) {
 		name  string
 		event *codexTurnEvent
 	}{
-		{name: "started", event: &codexTurnEvent{Kind: "started"}},
-		{name: "completed", event: &codexTurnEvent{Kind: "completed"}},
-		{name: "interrupted", event: &codexTurnEvent{Kind: "interrupted"}},
-		{name: "error", event: &codexTurnEvent{Kind: "error"}},
 		{name: "approval", event: &codexTurnEvent{Approval: &codexApprovalRequest{}}},
 		{name: "user input", event: &codexTurnEvent{UserInput: &codexUserInputEvent{}}},
 	}

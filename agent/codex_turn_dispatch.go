@@ -120,7 +120,10 @@ func isCodexFollowerWakeEvent(evt *codexTurnEvent) bool {
 // singleActiveTurnChannel 仅为空路由事件提供单活动通道兜底，明示未知 thread 必须丢弃。
 func (a *ACPAgent) singleActiveTurnChannel(threadID string, evt *codexTurnEvent) (chan *codexTurnEvent, bool) {
 	if strings.TrimSpace(threadID) != "" {
-		if isCodexTurnControlEvent(evt) {
+		// started/completed/interrupted/error 可能在 owner 清理后迟到；
+		// dispatchToTurnCh 已经通过 notifyCodexThreadActivity 触发状态重读，
+		// 这类事件无需按交互丢失告警。审批和用户输入仍必须显式保留告警。
+		if isCodexTurnInteractionEvent(evt) {
 			log.Printf("[acp] dropping turn event for inactive thread (thread=%q, activeTurns=%d, kind=%s)", threadID, len(a.turnCh), evt.Kind)
 		}
 		return nil, false

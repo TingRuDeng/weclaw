@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/google/uuid"
 )
 
@@ -30,6 +31,11 @@ func (h *Handler) preflightCodexTaskStart(opts codexTaskPreflightOptions) bool {
 	}
 	task, ok := h.activeTask(opts.route.conversationID)
 	if !ok {
+		return false
+	}
+	// 飞书需要先把可控任务的补充输入暂存，并展示“引导 / 撤回 / 停止”操作卡；
+	// 只读镜像没有可用的控制入口，继续走原有不可接收提示。
+	if opts.taskOpts.platform == platform.PlatformFeishu && !codexTaskUsesReadOnlySynchronization(task) {
 		return false
 	}
 	task.mu.Lock()
