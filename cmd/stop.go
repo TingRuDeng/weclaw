@@ -39,6 +39,7 @@ type stopOps struct {
 	prepareWithOptions func(context.Context, bool, bool, *config.Config) error
 	stop               func() error
 	legacyStop         func(context.Context, *config.Config, func() error) error
+	forceLegacy        func(context.Context, *config.Config, error, func(bool) error) error
 	cancel             func(context.Context, *config.Config) error
 	acquireLease       func() (io.Closer, error)
 	offlineForce       func(*config.Config) error
@@ -51,16 +52,17 @@ func defaultStopOps() stopOps {
 		isRunning:  weclawIsRunningForRestart,
 		prepare:    beginRestartDrainWithConfig,
 		prepareWithOptions: func(ctx context.Context, forceDrain bool, forceTerminate bool, cfg *config.Config) error {
-			return beginRestartDrainWithControl(ctx, forceDrain, false, forceTerminate, cfg)
+			return beginRestartDrainWithControl(ctx, forceDrain, forceTerminate, cfg)
 		},
-		stop:       stopAllWeclaw,
-		legacyStop: stopLegacyRuntime,
-		cancel:     cancelRestartDrain,
+		stop:        stopAllWeclaw,
+		legacyStop:  stopLegacyRuntime,
+		forceLegacy: forceLegacyRuntime,
+		cancel:      cancelRestartDrain,
 		acquireLease: func() (io.Closer, error) {
 			return agent.AcquireCodexRestartLease()
 		},
 		offlineForce: func(cfg *config.Config) error {
-			return ensureOfflineCodexRestartSafeWithOptions(cfg, true, false)
+			return ensureOfflineCodexRestartSafe(cfg, true)
 		},
 		out: os.Stdout,
 	}
@@ -89,6 +91,12 @@ func runStopWithOptions(ctx context.Context, force bool, ops stopOps) error {
 		if err := prepare(ctx, true, cfg); err != nil {
 			if errors.Is(err, errCoordinatedRestartUnsupported) {
 				if force {
+					if ops.forceLegacy != nil {
+						if err := ops.forceLegacy(ctx, cfg, err, nil); err != nil {
+							return err
+						}
+						return writeStopConfirmation(ops.out)
+					}
 					return err
 				}
 				if ops.legacyStop == nil {
@@ -126,6 +134,7 @@ func runStopWithOptions(ctx context.Context, force bool, ops stopOps) error {
 		if err := ops.offlineForce(cfg); err != nil {
 			return err
 		}
+		return writeStopConfirmation(ops.out)
 	}
 	if err := ops.stop(); err != nil {
 		return err

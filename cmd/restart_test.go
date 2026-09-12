@@ -12,13 +12,10 @@ import (
 	"github.com/fastclaw-ai/weclaw/config"
 )
 
-func TestRestartRegistersIndependentConflictingCodexHostStopFlag(t *testing.T) {
-	flag := restartCmd.Flags().Lookup("stop-conflicting-codex-hosts")
-	if flag == nil {
-		t.Fatal("restart 缺少 --stop-conflicting-codex-hosts")
-	}
-	if flag.Name == restartCmd.Flags().Lookup("force").Name {
-		t.Fatal("冲突 Host 停止授权不得复用 --force")
+func TestRestartRejectsRemovedConflictingCodexHostStopFlag(t *testing.T) {
+	err := restartCmd.ParseFlags([]string{"--stop-conflicting-codex-hosts"})
+	if err == nil || !strings.Contains(err.Error(), "unknown flag: --stop-conflicting-codex-hosts") {
+		t.Fatalf("旧参数应在执行重启前被拒绝，实际错误：%v", err)
 	}
 	force := restartCmd.Flags().Lookup("force")
 	if force == nil {
@@ -29,38 +26,17 @@ func TestRestartRegistersIndependentConflictingCodexHostStopFlag(t *testing.T) {
 	}
 }
 
-func TestRunRestartWithOptionsPropagatesConflictingHostAuthorization(t *testing.T) {
+func TestRunRestartPropagatesOfflineForceCodexTermination(t *testing.T) {
 	called := false
-	err := runRestartWithOptions(context.Background(), false, true, restartOps{
-		prepare: func(context.Context) (preparedStart, error) {
-			return preparedStart{cfg: config.DefaultConfig(), run: func() error { return nil }}, nil
-		},
-		ensureSafeWithOptions: func(_ context.Context, force bool, stopConflicts bool, _ *config.Config) error {
-			called = true
-			if force || !stopConflicts {
-				t.Fatalf("force=%v stopConflicts=%v", force, stopConflicts)
-			}
-			return nil
-		},
-		isRunning: func() bool { return false },
-		out:       &bytes.Buffer{},
-	})
-	if err != nil || !called {
-		t.Fatalf("runRestartWithOptions error=%v called=%v", err, called)
-	}
-}
-
-func TestRunRestartWithOptionsPropagatesOfflineConflictingHostAuthorization(t *testing.T) {
-	called := false
-	err := runRestartWithOptions(context.Background(), false, true, restartOps{
+	err := runRestart(context.Background(), true, restartOps{
 		prepare: func(context.Context) (preparedStart, error) {
 			return preparedStart{cfg: config.DefaultConfig(), run: func() error { return nil }}, nil
 		},
 		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
-		offlineSafeWithOptions: func(_ *config.Config, force bool, stopConflicts bool) error {
+		offlineSafe: func(_ *config.Config, force bool) error {
 			called = true
-			if force || !stopConflicts {
-				t.Fatalf("force=%v stopConflicts=%v", force, stopConflicts)
+			if !force {
+				t.Fatal("离线重启未收到强制停止 Codex 的授权")
 			}
 			return nil
 		},
@@ -68,29 +44,7 @@ func TestRunRestartWithOptionsPropagatesOfflineConflictingHostAuthorization(t *t
 		out:       &bytes.Buffer{},
 	})
 	if err != nil || !called {
-		t.Fatalf("runRestartWithOptions error=%v called=%v", err, called)
-	}
-}
-
-func TestRunRestartWithOptionsPropagatesOfflineForceCodexTermination(t *testing.T) {
-	called := false
-	err := runRestartWithOptions(context.Background(), true, false, restartOps{
-		prepare: func(context.Context) (preparedStart, error) {
-			return preparedStart{cfg: config.DefaultConfig(), run: func() error { return nil }}, nil
-		},
-		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
-		offlineSafeWithOptions: func(_ *config.Config, force bool, stopConflicts bool) error {
-			called = true
-			if !force || stopConflicts {
-				t.Fatalf("force=%v stopConflicts=%v", force, stopConflicts)
-			}
-			return nil
-		},
-		isRunning: func() bool { return false },
-		out:       &bytes.Buffer{},
-	})
-	if err != nil || !called {
-		t.Fatalf("runRestartWithOptions error=%v called=%v", err, called)
+		t.Fatalf("runRestart error=%v called=%v", err, called)
 	}
 }
 
@@ -175,10 +129,15 @@ func TestRunRestartDoesNotStartOfflineWhenCodexAppIsVisible(t *testing.T) {
 		prepare: func(context.Context) (preparedStart, error) {
 			return preparedStart{cfg: config.DefaultConfig(), run: func() error { started = true; return nil }}, nil
 		},
-		ensureSafe:  func(context.Context, bool, *config.Config) error { return nil },
-		isRunning:   func() bool { return false },
-		offlineSafe: func(*config.Config) error { return agent.ErrCodexDesktopFrontendActive },
-		out:         &bytes.Buffer{},
+		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
+		isRunning:  func() bool { return false },
+		offlineSafe: func(_ *config.Config, force bool) error {
+			if force {
+				t.Fatal("普通离线重启不得强制停止 Codex")
+			}
+			return agent.ErrCodexDesktopFrontendActive
+		},
+		out: &bytes.Buffer{},
 	})
 	if !errors.Is(err, agent.ErrCodexDesktopFrontendActive) || started {
 		t.Fatalf("error=%v started=%v", err, started)

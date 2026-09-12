@@ -13,10 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	restartForceFlag                     bool
-	restartStopConflictingCodexHostsFlag bool
-)
+var restartForceFlag bool
 
 func init() {
 	restartCmd.Flags().BoolVar(
@@ -25,12 +22,6 @@ func init() {
 		false,
 		"中断本地任务，关闭 Codex App，并强制停止当前用户的 Codex Host",
 	)
-	restartCmd.Flags().BoolVar(
-		&restartStopConflictingCodexHostsFlag,
-		"stop-conflicting-codex-hosts",
-		false,
-		"停止身份验证通过且阻塞重启的 Codex Host；可能退出 Codex App",
-	)
 	rootCmd.AddCommand(restartCmd)
 }
 
@@ -38,28 +29,26 @@ var restartCmd = &cobra.Command{
 	Use:   "restart",
 	Short: "协调重启 WeClaw 服务与受管 Codex Host",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runRestartWithOptions(
+		return runRestart(
 			context.Background(),
 			restartForceFlag,
-			restartStopConflictingCodexHostsFlag,
 			defaultRestartOps(),
 		)
 	},
 }
 
 type restartOps struct {
-	prepare                func(context.Context) (preparedStart, error)
-	acquireLease           func() (io.Closer, error)
-	ensureSafe             func(context.Context, bool, *config.Config) error
-	ensureSafeWithOptions  func(context.Context, bool, bool, *config.Config) error
-	offlineSafe            func(*config.Config) error
-	offlineSafeWithOptions func(*config.Config, bool, bool) error
-	isRunning              func() bool
-	stop                   func() error
-	isSystemd              func() bool
-	restartSystemd         func() error
-	cancelDrain            func(context.Context, *config.Config) error
-	out                    io.Writer
+	prepare        func(context.Context) (preparedStart, error)
+	acquireLease   func() (io.Closer, error)
+	ensureSafe     func(context.Context, bool, *config.Config) error
+	offlineSafe    func(*config.Config, bool) error
+	isRunning      func() bool
+	stop           func() error
+	isSystemd      func() bool
+	restartSystemd func() error
+	cancelDrain    func(context.Context, *config.Config) error
+	forceLegacy    func(context.Context, *config.Config, error, func(bool) error) error
+	out            io.Writer
 }
 
 func defaultRestartOps() restartOps {
@@ -67,47 +56,48 @@ func defaultRestartOps() restartOps {
 		prepare: func(ctx context.Context) (preparedStart, error) {
 			return prepareConfiguredStart(ctx, runBackgroundStart)
 		},
-		acquireLease:           func() (io.Closer, error) { return agent.AcquireCodexRestartLease() },
-		ensureSafe:             beginRestartDrainWithConfig,
-		ensureSafeWithOptions:  beginRestartDrainWithConfigOptions,
-		offlineSafe:            ensureOfflineCodexRestartSafe,
-		offlineSafeWithOptions: ensureOfflineCodexRestartSafeWithOptions,
-		isRunning:              weclawIsRunningForRestart,
-		stop:                   stopAllWeclaw,
-		isSystemd:              isSystemdManagedRuntime,
-		restartSystemd:         restartSystemdService,
-		cancelDrain:            cancelRestartDrain,
-		out:                    os.Stdout,
+		acquireLease:   func() (io.Closer, error) { return agent.AcquireCodexRestartLease() },
+		ensureSafe:     beginRestartDrainWithConfigOptions,
+		offlineSafe:    ensureOfflineCodexRestartSafe,
+		isRunning:      weclawIsRunningForRestart,
+		stop:           stopAllWeclaw,
+		isSystemd:      isSystemdManagedRuntime,
+		restartSystemd: restartSystemdService,
+		cancelDrain:    cancelRestartDrain,
+		forceLegacy:    forceLegacyRuntime,
+		out:            os.Stdout,
 	}
 }
 
 // runRestart 在停止旧服务前固化已预检的配置和启动闭包。
 func runRestart(ctx context.Context, force bool, ops restartOps) error {
-	return runRestartWithOptions(ctx, force, false, ops)
-}
-
-func runRestartWithOptions(ctx context.Context, force bool, stopConflictingCodexHosts bool, ops restartOps) error {
 	prepared, err := ops.prepare(ctx)
 	if err != nil {
 		return err
 	}
-	ensureSafe := ops.ensureSafe
-	if ops.ensureSafeWithOptions != nil {
-		ensureSafe = func(ctx context.Context, force bool, cfg *config.Config) error {
-			return ops.ensureSafeWithOptions(ctx, force, stopConflictingCodexHosts, cfg)
+	start := func(systemd bool) error {
+		if systemd {
+			return ops.restartSystemd()
 		}
+		return prepared.run()
 	}
-	if ensureSafe == nil {
+	if ops.ensureSafe == nil {
 		return fmt.Errorf("协调重启缺少安全预检")
 	}
-	if err := ensureSafe(ctx, force, prepared.cfg); err != nil {
+	if err := ops.ensureSafe(ctx, force, prepared.cfg); err != nil {
 		if errors.Is(err, errCoordinatedRestartUnsupported) {
+			if force && ops.forceLegacy != nil {
+				return ops.forceLegacy(ctx, prepared.cfg, err, start)
+			}
 			return err
 		}
 		return compensateRestartDrain(err, ops.cancelDrain, prepared.cfg)
 	}
 	running := ops.isRunning()
 	if !running {
+		if force && ops.forceLegacy != nil {
+			return ops.forceLegacy(ctx, prepared.cfg, nil, start)
+		}
 		if ops.acquireLease != nil {
 			lease, leaseErr := ops.acquireLease()
 			if leaseErr != nil {
@@ -115,14 +105,8 @@ func runRestartWithOptions(ctx context.Context, force bool, stopConflictingCodex
 			}
 			defer lease.Close()
 		}
-		offlineSafe := ops.offlineSafe
-		if ops.offlineSafeWithOptions != nil {
-			offlineSafe = func(cfg *config.Config) error {
-				return ops.offlineSafeWithOptions(cfg, force, stopConflictingCodexHosts)
-			}
-		}
-		if offlineSafe != nil {
-			if err := offlineSafe(prepared.cfg); err != nil {
+		if ops.offlineSafe != nil {
+			if err := ops.offlineSafe(prepared.cfg, force); err != nil {
 				return err
 			}
 		}
@@ -167,39 +151,23 @@ func compensateRestartDrain(
 	return cause
 }
 
-func ensureOfflineCodexRestartSafe(cfg *config.Config) error {
-	return ensureOfflineCodexRestartSafeWithOptions(cfg, false, false)
-}
-
-func ensureOfflineCodexRestartSafeWithOptions(cfg *config.Config, force bool, stopConflictingCodexHosts bool) error {
+func ensureOfflineCodexRestartSafe(cfg *config.Config, force bool) error {
+	if force {
+		return forceLegacyRuntimeWithLease(context.Background(), cfg, nil, nil, configuredLegacyCodexController)
+	}
 	configured := false
-	var codexConfig config.AgentConfig
 	for _, candidate := range cfg.Agents {
 		if isCodexAppServerAgent(candidate) {
 			configured = true
-			codexConfig = candidate
 			break
 		}
 	}
 	if !configured {
 		return nil
 	}
-	if force || stopConflictingCodexHosts {
-		codexAgent := agent.NewACPAgent(acpAgentConfigFromConfig("codex", codexConfig))
-		var err error
-		if force {
-			_, err = codexAgent.ForceStopCodexRuntime(context.Background())
-		} else {
-			_, err = codexAgent.StopConflictingCodexHosts(context.Background())
-		}
-		if err != nil {
-			return err
-		}
-		return nil
-	}
 	socketExists, processExists := agent.CodexDesktopFrontendPresence()
 	if socketExists || processExists {
-		return fmt.Errorf("%w；请完整退出 Codex App，或显式使用 --stop-conflicting-codex-hosts 后重试", agent.ErrCodexDesktopFrontendActive)
+		return fmt.Errorf("%w；请完整退出 Codex App；如接受中断本地任务并由程序退出 App、停止 Codex Host，可使用 --force", agent.ErrCodexDesktopFrontendActive)
 	}
 	return nil
 }

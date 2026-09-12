@@ -71,7 +71,7 @@ func TestBeginRestartDrainOptionsPassesCodexTerminationAuthorization(t *testing.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested = true
 		if r.Method != http.MethodPost || r.URL.Path != "/api/runtime/restart/prepare" ||
-			r.URL.Query().Get("force") != "true" || r.URL.Query().Get("force_drain") != "" {
+			r.URL.RawQuery != "force=true" {
 			t.Fatalf("request=%s %s, want operator force POST", r.Method, r.URL.String())
 		}
 		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: true})
@@ -82,7 +82,7 @@ func TestBeginRestartDrainOptionsPassesCodexTerminationAuthorization(t *testing.
 	}
 	cfg := config.DefaultConfig()
 	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
-	if err := beginRestartDrainWithConfigOptions(context.Background(), true, false, cfg); err != nil {
+	if err := beginRestartDrainWithConfigOptions(context.Background(), true, cfg); err != nil {
 		t.Fatalf("beginRestartDrainWithConfigOptions: %v", err)
 	}
 	if !requested {
@@ -90,14 +90,14 @@ func TestBeginRestartDrainOptionsPassesCodexTerminationAuthorization(t *testing.
 	}
 }
 
-func TestBeginRestartDrainPassesConflictingHostAuthorization(t *testing.T) {
+func TestBeginRestartDrainOptionsKeepsOrdinaryRestartNonForced(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	requested := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested = true
 		if r.Method != http.MethodPost || r.URL.Path != "/api/runtime/restart/prepare" ||
-			r.URL.Query().Get("stop_conflicting_codex_hosts") != "true" {
-			t.Fatalf("request=%s %s, want explicit conflicting-host authorization", r.Method, r.URL.String())
+			r.URL.RawQuery != "" {
+			t.Fatalf("普通重启不得附加强制停止授权，实际请求：%s %s", r.Method, r.URL.String())
 		}
 		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: true})
 	}))
@@ -107,7 +107,7 @@ func TestBeginRestartDrainPassesConflictingHostAuthorization(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
-	if err := beginRestartDrainWithConfigOptions(context.Background(), false, true, cfg); err != nil {
+	if err := beginRestartDrainWithConfigOptions(context.Background(), false, cfg); err != nil {
 		t.Fatalf("beginRestartDrainWithConfigOptions: %v", err)
 	}
 	if !requested {
@@ -178,7 +178,7 @@ func TestBeginRestartDrainReportsLegacyRuntimeMigration(t *testing.T) {
 	if strings.Contains(message, "cannot unmarshal number") {
 		t.Fatalf("error=%v, plain-text 404 must not be decoded as a JSON number", err)
 	}
-	for _, want := range []string{"v0.1.267", "weclaw stop", "weclaw start", "weclaw restart"} {
+	for _, want := range []string{"v0.1.267", "未停止任何进程", "weclaw restart --force", "中断任务"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("error=%v, want %q", err, want)
 		}

@@ -417,7 +417,6 @@ weclaw start --foreground    # 前台调试
 weclaw status
 weclaw restart
 weclaw restart --force       # 中断任务，关闭 App 并强制停止当前用户的 Codex Host
-weclaw restart --stop-conflicting-codex-hosts  # 明确停止已验证的冲突 Codex Host
 weclaw stop
 weclaw stop --force          # 中断任务，关闭 App 并强制停止当前用户的 Codex Host
 weclaw update
@@ -432,10 +431,12 @@ weclaw version
 
 显式 `restart --force`、`stop --force` 或 `update --restart --force` 表示操作者接受本地任务中断。WeClaw 会取消自身任务、请求 Codex App 退出，然后从实时进程快照中强制停止当前用户的 Codex `app-server` 进程组，包括管理身份不完整的 Host。未知 Host 必须由 app-server 领衔独立进程组；若它与 shell 或其他程序共享进程组，WeClaw 会拒绝连带终止。首次发信号前会重读原始 argv 并复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份，不仅根据旧 PID 或进程名杀进程。进程表/参数不可读、身份漂移或 Host 停止结果未知时，整个 stop/restart/update 仍失败关闭，不会继续启动可能形成第二个 Host 的服务；若服务已因上一次未知结果保持不可写，后续显式 `--force` 会重新扫描并尝试收敛，而不是复用旧的成功缓存。直接 `SIGINT`/`SIGTERM` 没有这份显式授权，仍按普通模式保留无法确认的 Host。
 
-仓库自带的 `service/weclaw.service` 使用 `KillMode=process`，让 systemd 只向 WeClaw 主进程发信号、由上述事务管理 Host。后续服务启动必须在平台监听前读取事务状态、启动唯一 Host 并验证 generation 已变化。实际安装新版本后任何预检、停止或启动失败都会恢复旧二进制并在必要时重启旧服务。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新使用 `weclaw update`；发布前本地包验证使用下文的 `package --install`，同样经过校验和回滚事务，不直接复制覆盖二进制。
+仓库自带的 `service/weclaw.service` 使用 `KillMode=process`，让 systemd 只向 WeClaw 主进程发信号、由上述事务管理 Host。后续服务启动必须在平台监听前读取事务状态、启动唯一 Host 并验证 generation 已变化。实际安装新版本后，常规预检、停止或启动失败会恢复旧二进制并在必要时重启旧服务；旧版离线强制迁移一旦记录停止意图，失败时保留新版供 `--force` 重试，避免旧二进制忽略未完成的恢复记录。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新使用 `weclaw update`；发布前本地包验证使用下文的 `package --install`，同样经过校验和回滚事务，不直接复制覆盖二进制。
 
-若 WeClaw 服务本来就未运行，`weclaw restart` 默认仍只检查 Codex App/受控 CLI 并直接启动；发现外部 Host 时会失败关闭，不停止任何进程。显式 `--stop-conflicting-codex-hosts` 只停止 metadata/lifecycle 身份验证通过的 Host；显式 `--force` 则先退出 Codex App，再使用实时进程快照停止当前用户的 Codex `app-server` 进程组，包括管理身份不完整的 Host。首次信号前会重读原始 argv 并复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份。进程表/参数不可读或身份发生漂移时仍失败关闭，不会仅根据旧 PID 或进程名强杀。
-从尚不支持该协调端点的旧版本首次升级时，PATH 中的新二进制与内存中仍运行的旧服务具有不同能力。新 CLI 收到协调端点的 HTTP 404 时会先识别能力协商结果，不把纯文本 `404 page not found` 误解析成 JSON，也不向不存在的事务发送补偿请求；随后只有在 Codex App 和受控 CLI 已退出、能够取得 frontend lease，且旧服务的 `/api/runtime/drain` 明确返回 `draining=true`、`active_tasks=0`、`remaining_tasks=0` 时，才关闭旧服务的消息准入并只停止 WeClaw 自身。任一迁移门禁失败都保持失败关闭，不停止任何进程。迁移停止不代表 Codex Host 已轮换：先执行 `weclaw start` 让新版服务真正运行，再执行 `weclaw restart` 完成正式 Host 停止和 generation 验证。
+若 WeClaw 服务本来就未运行，`weclaw restart` 默认仍只检查 Codex App/受控 CLI 并直接启动；发现外部 Host 时会失败关闭，不停止任何进程。显式 `--force` 会先退出 Codex App，再使用实时进程快照停止当前用户的 Codex `app-server` 进程组，包括管理身份不完整的 Host。首次信号前会重读原始 argv 并复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份。进程表/参数不可读或身份发生漂移时仍失败关闭，不会仅根据旧 PID 或进程名强杀。
+从尚不支持协调接口的旧版本（例如 v0.1.245）升级时，可以直接执行 `weclaw restart --force`；只需要停止时使用 `weclaw stop --force`，更新并重启也支持 `weclaw update --restart --force`。新 CLI 会先记录恢复状态、核实并停止旧 WeClaw，再退出 Codex App、停止 Host，最后按命令需要启动新版并等待 Host 验证完成，不再要求手动执行 stop/start/restart 三步迁移。受控 `weclaw codex cli` 仍需先退出。若中途失败，保留恢复记录，重新执行 `stop --force` 或 `restart --force` 即可继续；普通启动不会越过未完成的停止阶段。systemd 管理的旧服务由 `weclaw.service` 停止和重新启动，要求 `KillMode=process`。
+
+未使用 `--force` 的旧版迁移仍要求 App/CLI 已退出，且旧排空接口确认没有活动任务；不具备排空接口的旧版应使用上述强制迁移。CLI 不会把 HTTP 404 当作 JSON，也不会向不存在的旧事务发送补偿请求。
 
 ## 从源码构建
 

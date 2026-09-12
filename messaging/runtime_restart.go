@@ -25,10 +25,12 @@ type RuntimeRestartResult struct {
 }
 
 type runtimeRestartState struct {
-	Version    int                        `json:"version"`
-	PreparedAt time.Time                  `json:"prepared_at"`
-	Codex      bool                       `json:"codex"`
-	CodexHost  agent.CodexRestartSnapshot `json:"codex_host"`
+	Version             int                        `json:"version"`
+	PreparedAt          time.Time                  `json:"prepared_at"`
+	Codex               bool                       `json:"codex"`
+	CodexHost           agent.CodexRestartSnapshot `json:"codex_host"`
+	OfflineForcePending bool                       `json:"offline_force_pending,omitempty"`
+	ServiceManager      string                     `json:"service_manager,omitempty"`
 }
 
 const runtimeRestartStateVersion = 1
@@ -263,6 +265,9 @@ func (h *Handler) RecoverRuntimeRestart(ctx context.Context) error {
 	state, exists, err := h.readRuntimeRestartState()
 	if err != nil || !exists {
 		return err
+	}
+	if state.OfflineForcePending {
+		return fmt.Errorf("离线强制停止尚未完成，请运行 weclaw stop --force 或 weclaw restart --force 重试")
 	}
 	if state.Version != runtimeRestartStateVersion || state.PreparedAt.IsZero() {
 		return fmt.Errorf("重启事务状态无效")

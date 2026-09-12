@@ -476,10 +476,12 @@
 - 正确做法：受控 CLI 全程持共享内核租约，重启持排他租约；要求用户完整退出 App；在全局 idle 和 lifecycle lock 下只停止身份验证通过的 daemon/managed Host；Host 停止前持久化恢复状态，新服务在平台监听前验证唯一且 generation 已变化的 Host，外层停止失败则先重建 Host 才恢复消息准入。
 - 来源：2026-08-12 飞书接管同一 Codex thread 时复现 App/daemon writer 冲突，用户确认更新重启应统一收敛 Codex App、CLI、daemon 与 Host 生命周期。
 
-## 2026-08-19 冲突 Codex Host 必须显式授权后才可停止
+## 2026-08-19 冲突 Codex Host 必须显式授权后才可停止（历史参数已移除）
+
+本节保留旧实现的设计记录；当前命令行统一使用 `--force`，其授权和安全边界以“2026-08-27 `--force` 是本地 Codex 终止授权”为准。
 
 - 触发条件：Codex App 私有 Host、official daemon 或另一个 WeClaw-managed Host 残留，阻塞 `weclaw restart` 启动唯一共享 Host。
-- 规则：默认 restart 只读列出冲突并失败关闭；独立的 `--stop-conflicting-codex-hosts` 才授予一次停止授权。`--force` 只中断 WeClaw 自身任务，不能扩大为停止 Codex 服务或 Codex App。
+- 历史规则：默认 restart 只读列出冲突并失败关闭；当时以独立参数授予一次冲突 Host 停止授权，`--force` 仅中断 WeClaw 自身任务。该参数及职责划分现已移除。
 - 正确做法：先捕获全部冲突目标并持久化重启意图，再对每个目标复核 PID、PGID、UID、启动时间、原始 argv/命令哈希及类型专属 ownership proof；official daemon 只能调用其 lifecycle stop，managed Host 只能更新匹配的受保护 metadata，App 私有 Host 只能停止完整验证过的同一进程组。任何漂移、未知进程、metadata/lifecycle 不一致或停止结果不可确认都失败关闭。
 - 离线边界：WeClaw 未运行时默认仍不触碰外部 Host；显式参数通过同一 Agent 证明和停止逻辑处理残留 Host，不删除 lock、journal 或 Codex 数据目录。
 - 来源：2026-08-19 用户确认允许触碰 official daemon 或 WeClaw-managed Host，并要求 restart 列出阻塞服务、经显式参数后才自行停止对应服务。
@@ -508,6 +510,8 @@
 - 来源：2026-08-13 用户在已安装 `v0.1.268`、运行中服务仍为 `v0.1.267` 时执行 `weclaw restart` 的真实错误反馈。
 
 ## 2026-08-23 旧服务升级后的 stop 必须使用可证明的迁移排空
+
+- 适用范围：以下排空规则适用于普通 `stop`；显式 `--force` 的无接口旧版迁移按 2026-08-27 条目处理。
 
 - 触发条件：新 CLI 发现运行中的旧 WeClaw 不支持 `/api/runtime/restart/prepare`，但用户需要先停掉旧服务以完成升级。
 - 规则：HTTP 404 先按能力协商处理，不解析纯文本为 JSON，也不向不存在的事务发送 DELETE 补偿。只有在 frontend lease 可得、Codex App 和受控 CLI 已退出，且旧 `/api/runtime/drain` 明确确认 `draining=true`、`active_tasks=0`、`remaining_tasks=0` 时，`weclaw stop` 才能关闭旧服务的消息准入并停止 WeClaw 自身；Codex Host 保留到新版 `weclaw restart` 完成正式 generation 轮换。
@@ -981,6 +985,7 @@
 - 规则：`--force` 表示用户接受正在执行的本地任务被中断；它不得降级为“只操作 WeClaw，保留 Host”。强制路径先退出 App，再对实时快照中当前用户的实际 Codex `app-server` 进程组执行终止，不要求 metadata/lifecycle 管理身份完整。
 - 安全边界：管理身份不完整不等于可以盲杀。首次发信号前必须重读进程表和原始 argv，复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份。未知 Host 还必须由 app-server 领衔独立进程组，不能仅根据持久化旧 PID、进程名或一个共享 PGID 停止程序。
 - 失败边界：进程表/参数不可读、身份漂移、受控 CLI 租约存在或 Host 停止结果未知时，整个操作仍失败关闭；命令层必须补偿并返回错误，不得启动可能产生第二 Host 的新服务。服务已因未知结果保持不可写时，后续显式 `--force` 必须重新扫描并尝试强制收敛，不能直接复用旧事务成功。
+- 旧版兼容：协调端点 404 不得阻断显式强制迁移。新 CLI 在进程变更前写 pending，核实并停止旧服务、取得运行锁，再执行正式 Host 强制事务；中途失败保留记录及新版，重试 force 继续扫描，禁止恢复旧二进制绕过 pending。
 - 来源：用户明确说明“强制重启”的前提就是知道并接受正在执行的本地任务被中断。
 
 ## 2026-09-01 Codex 多前端写入以权威 Host 可用性为准

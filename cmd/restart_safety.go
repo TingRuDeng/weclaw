@@ -24,6 +24,13 @@ var restartDrainHTTPClient = &http.Client{Timeout: restartDrainTimeout}
 
 var errCoordinatedRestartUnsupported = errors.New("运行中的 WeClaw 不支持协调重启接口")
 
+type legacyRuntimeError struct{ state runtimeState }
+
+func (e *legacyRuntimeError) Error() string {
+	return legacyRuntimeRestartError(e.state.Version).Error()
+}
+func (e *legacyRuntimeError) Unwrap() error { return errCoordinatedRestartUnsupported }
+
 type runtimeStatusResponse struct {
 	Status      string `json:"status"`
 	ActiveTasks *int   `json:"active_tasks"`
@@ -82,22 +89,20 @@ func ensureRestartSafe(ctx context.Context, opts restartSafetyOptions) error {
 }
 
 func beginRestartDrainWithConfig(ctx context.Context, force bool, cfg *config.Config) error {
-	return beginRestartDrainWithControl(ctx, force, false, false, cfg)
+	return beginRestartDrainWithControl(ctx, force, false, cfg)
 }
 
 func beginRestartDrainWithConfigOptions(
 	ctx context.Context,
 	force bool,
-	stopConflictingCodexHosts bool,
 	cfg *config.Config,
 ) error {
-	return beginRestartDrainWithControl(ctx, force, stopConflictingCodexHosts, force, cfg)
+	return beginRestartDrainWithControl(ctx, force, force, cfg)
 }
 
 func beginRestartDrainWithControl(
 	ctx context.Context,
 	forceDrain bool,
-	stopConflictingCodexHosts bool,
 	forceTerminateCodex bool,
 	cfg *config.Config,
 ) error {
@@ -109,7 +114,7 @@ func beginRestartDrainWithControl(
 	if err != nil {
 		return fmt.Errorf("无法连接安全重启排空入口: %w", err)
 	}
-	if forceDrain || stopConflictingCodexHosts || forceTerminateCodex {
+	if forceDrain || forceTerminateCodex {
 		parsed, err := url.Parse(endpoint)
 		if err != nil {
 			return fmt.Errorf("解析安全重启排空入口: %w", err)
@@ -119,9 +124,6 @@ func beginRestartDrainWithControl(
 			query.Set("force", "true")
 		} else if forceDrain {
 			query.Set("force_drain", "true")
-		}
-		if stopConflictingCodexHosts {
-			query.Set("stop_conflicting_codex_hosts", "true")
 		}
 		parsed.RawQuery = query.Encode()
 		endpoint = parsed.String()
@@ -137,7 +139,7 @@ func beginRestartDrainWithControl(
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return legacyRuntimeRestartError(state.Version)
+		return &legacyRuntimeError{state: state}
 	}
 	var result runtimeDrainResponse
 	decoder := json.NewDecoder(resp.Body)
@@ -175,8 +177,8 @@ func legacyRuntimeRestartError(version string) error {
 		version = "旧版本"
 	}
 	return fmt.Errorf(
-		"%w（运行版本 %s），未停止任何进程；为保持 Codex Host 单写入，不能降级为普通重启。"+
-			"请先等待所有任务完成并完整退出 Codex App、受控 CLI，然后依次执行 weclaw stop、weclaw start、weclaw restart 完成一次性迁移",
+		"%w（运行版本 %s），未停止任何进程；可使用 weclaw restart --force 自动迁移（会中断任务并关闭 Codex App/Host）；"+
+			"如需保留任务，请等待所有任务完成并完整退出 Codex App、受控 CLI 后再迁移",
 		errCoordinatedRestartUnsupported, version,
 	)
 }
@@ -197,7 +199,7 @@ func stopLegacyRuntime(ctx context.Context, cfg *config.Config, stop func() erro
 		return fmt.Errorf("旧版服务迁移停止无法取得 Codex frontend 租约: %w", err)
 	}
 	defer lease.Close()
-	if err := ensureOfflineCodexRestartSafeWithOptions(cfg, false, false); err != nil {
+	if err := ensureOfflineCodexRestartSafe(cfg, false); err != nil {
 		return fmt.Errorf("旧版服务迁移停止前 Codex App 检查失败: %w", err)
 	}
 	if err := beginLegacyRuntimeDrain(ctx, cfg); err != nil {

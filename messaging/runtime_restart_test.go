@@ -5,10 +5,51 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
+
+func TestRecoverRuntimeRestartKeepsIncompleteOfflineForce(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.runtimeRestartStateFile = filepath.Join(t.TempDir(), "runtime-restart.json")
+	data := `{"version":1,"prepared_at":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","offline_force_pending":true}`
+	if err := securefile.Write(h.runtimeRestartStateFile, []byte(data)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.RecoverRuntimeRestart(context.Background()); err == nil || !strings.Contains(err.Error(), "离线强制停止尚未完成") {
+		t.Fatalf("未完成的离线强制停止不应允许启动: %v", err)
+	}
+	if _, err := os.Stat(h.runtimeRestartStateFile); err != nil {
+		t.Fatal("必须保留恢复记录", err)
+	}
+}
+
+func TestOfflineForceRetryKeepsSystemdManager(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	h := &Handler{}
+	path, err := h.runtimeRestartStatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := `{"version":2,"prepared_at":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","offline_force_pending":true,"service_manager":"systemd"}`
+	if err := securefile.Write(path, []byte(data)); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareOfflineRuntimeRestart(context.Background(), func() error { return nil }, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := securefile.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stored), `"service_manager": "systemd"`) {
+		t.Fatal("离线重试丢失 systemd 管理方式")
+	}
+}
 
 type fakeCodexRestartAgent struct {
 	fakeAgent

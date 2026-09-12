@@ -112,7 +112,7 @@ func TestRunStopForcePropagatesCodexTerminationAuthorization(t *testing.T) {
 	}
 }
 
-func TestRunStopForceTerminatesOfflineCodexBeforeStopping(t *testing.T) {
+func TestRunStopForceDoesNotSignalAgainAfterOfflineTransaction(t *testing.T) {
 	var calls []string
 	err := runStopWithOptions(context.Background(), true, stopOps{
 		isRunning: func() bool { calls = append(calls, "running"); return false },
@@ -135,7 +135,7 @@ func TestRunStopForceTerminatesOfflineCodexBeforeStopping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runStopWithOptions force offline: %v", err)
 	}
-	if got, want := strings.Join(calls, ","), "running,load,lease,force,stop"; got != want {
+	if got, want := strings.Join(calls, ","), "running,load,lease,force"; got != want {
 		t.Fatalf("calls=%s, want %s", got, want)
 	}
 }

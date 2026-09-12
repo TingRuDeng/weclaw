@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/spf13/cobra"
 )
 
@@ -144,6 +145,9 @@ func finishUpdate(
 		return err
 	}
 	if err := completeUpdateWithRollback(ctx, restart, force, completion, transaction.Rollback); err != nil {
+		if errors.Is(err, messaging.ErrOfflineRuntimeRestartIncomplete) {
+			transaction.Commit()
+		}
 		return err
 	}
 	transaction.Commit()
@@ -230,6 +234,7 @@ type updateCompletionOps struct {
 	isSystemd      func() bool
 	restartSystemd func() error
 	cancelDrain    func(context.Context, *config.Config) error
+	forceLegacy    func(context.Context, *config.Config, error, func(bool) error) error
 	out            io.Writer
 }
 
@@ -239,14 +244,13 @@ func defaultUpdateCompletionOps() updateCompletionOps {
 		prepare: func(ctx context.Context) (preparedStart, error) {
 			return prepareConfiguredStart(ctx, runBackgroundStart)
 		},
-		ensureSafe: func(ctx context.Context, force bool, cfg *config.Config) error {
-			return beginRestartDrainWithConfigOptions(ctx, force, false, cfg)
-		},
+		ensureSafe:     beginRestartDrainWithConfigOptions,
 		running:        weclawIsRunningForRestart,
 		stop:           stopAllWeclaw,
 		isSystemd:      isSystemdManagedRuntime,
 		restartSystemd: restartSystemdService,
 		cancelDrain:    cancelRestartDrain,
+		forceLegacy:    forceLegacyRuntime,
 		out:            os.Stdout,
 	}
 }
@@ -278,6 +282,23 @@ func completeUpdateWithRollback(
 	}
 	if err := ops.ensureSafe(ctx, force, prepared.cfg); err != nil {
 		if errors.Is(err, errCoordinatedRestartUnsupported) {
+			if force && ops.forceLegacy != nil {
+				// 离线强制停止可能已经产生副作用；旧二进制不认识 pending
+				// 记录，不能回滚后自动拉起旧服务。保留新版供 --force 重试。
+				migrationErr := ops.forceLegacy(ctx, prepared.cfg, err, func(systemd bool) error {
+					if systemd {
+						return ops.restartSystemd()
+					}
+					return prepared.run()
+				})
+				if migrationErr == nil {
+					return nil
+				}
+				if errors.Is(migrationErr, messaging.ErrOfflineRuntimeRestartIncomplete) {
+					return fmt.Errorf("已保留新版二进制；请运行 weclaw restart --force 继续恢复: %w", migrationErr)
+				}
+				return rollbackUpdatedBinary(migrationErr, rollback, ops.out)
+			}
 			return rollbackUpdatedBinary(err, rollback, ops.out)
 		}
 		return rollbackUpdatedBinary(compensateRestartDrain(err, ops.cancelDrain, prepared.cfg), rollback, ops.out)

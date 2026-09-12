@@ -27,6 +27,16 @@ const (
 
 var ErrCodexHostConflict = errors.New("检测到未获授权的 Codex Host")
 
+// RequireNoCodexHosts 在没有配置 Codex Agent 的离线停止中证明没有遗留 Host。
+// 只读取当前用户进程，不启动、连接或停止 Host。
+func (a *ACPAgent) RequireNoCodexHosts(ctx context.Context) error {
+	processes, uids, err := a.readCodexHostConflictSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	return validateCodexHostProcessGroups(collectCodexHostProcessGroups(processes, uids), nil)
+}
+
 type codexHostProcessSnapshot struct {
 	PID        int
 	PPID       int
