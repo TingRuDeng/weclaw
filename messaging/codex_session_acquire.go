@@ -55,6 +55,8 @@ type codexSessionAcquireResult struct {
 	handoffReleaseThreadID       string
 	handoffReleaseErr            error
 	handoffReleaseRetainedByTask bool
+	suppressLatestIdleResult     bool
+	latestIdleResultClaimErr     error
 }
 
 // acquireCodexSessionWithBindingLocked atomically commits one frontend's
@@ -172,6 +174,9 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		req.route.bindingKey, req.route.conversationID, storeSelectionChanged,
 	)
 	result, err = h.attachCodexAcquireObserver(result, req, liveAgent)
+	if err == nil {
+		result = h.claimLatestIdleCodexResult(result)
+	}
 	if result.runtimeErr != nil {
 		result = h.recordCodexRuntimeRecoveryResult(req, result)
 	}
@@ -180,6 +185,20 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		h.commitCodexTaskCardFocus(req.route.bindingKey, req.route.conversationID)
 	}
 	return result, err
+}
+
+func (h *Handler) claimLatestIdleCodexResult(result codexSessionAcquireResult) codexSessionAcquireResult {
+	state := latestIdleCodexState(result)
+	if len(renderLatestIdleCodexTaskResult(state)) == 0 {
+		result.suppressLatestIdleResult = true
+		return result
+	}
+	claimed, err := h.ensureCodexSessions().claimPresentedResult(
+		result.route.bindingKey, result.route.threadID, state.LastTurnID,
+	)
+	result.suppressLatestIdleResult = !claimed
+	result.latestIdleResultClaimErr = err
+	return result
 }
 
 func (h *Handler) rollbackCodexAcquireBinding(

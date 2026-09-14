@@ -204,7 +204,8 @@ func cloneCodexSessionBindings(source map[string]codexSessionBinding) map[string
 		}
 		cloned[key] = codexSessionBinding{
 			ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces,
-			FollowRevision: binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
+			PresentedResultTurns: cloneCodexPresentedResultTurns(binding.PresentedResultTurns),
+			FollowRevision:       binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
 			FollowerAttachRevision:    binding.FollowerAttachRevision,
 			FollowerAttachPhase:       binding.FollowerAttachPhase,
 			FollowerAttachTurnID:      strings.TrimSpace(binding.FollowerAttachTurnID),
@@ -237,11 +238,36 @@ func sameCodexSessionBinding(left codexSessionBinding, right codexSessionBinding
 		left.FollowerRuntimeGeneration != right.FollowerRuntimeGeneration ||
 		left.FollowTurnID != right.FollowTurnID || left.FollowTurnInitialized != right.FollowTurnInitialized ||
 		left.FollowTurnPending != right.FollowTurnPending ||
-		!sameCodexFrontendFollower(left.Follower, right.Follower) || len(left.Workspaces) != len(right.Workspaces) {
+		!sameCodexFrontendFollower(left.Follower, right.Follower) ||
+		!sameCodexPresentedResultTurns(left.PresentedResultTurns, right.PresentedResultTurns) ||
+		len(left.Workspaces) != len(right.Workspaces) {
 		return false
 	}
 	for workspaceRoot, session := range left.Workspaces {
 		if right.Workspaces[workspaceRoot] != session {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneCodexPresentedResultTurns(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(source))
+	for threadID, turnID := range source {
+		cloned[threadID] = turnID
+	}
+	return cloned
+}
+
+func sameCodexPresentedResultTurns(left map[string]string, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for threadID, turnID := range left {
+		if right[threadID] != turnID {
 			return false
 		}
 	}

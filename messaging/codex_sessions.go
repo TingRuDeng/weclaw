@@ -40,6 +40,7 @@ type legacyCodexControlIntent struct {
 type codexSessionBinding struct {
 	ActiveWorkspace           string
 	Workspaces                map[string]codexWorkspaceSession
+	PresentedResultTurns      map[string]string
 	FollowRevision            uint64
 	Follower                  *codexFrontendFollower
 	FollowerAttachRevision    uint64
@@ -115,6 +116,7 @@ type codexPersistedControlTarget struct {
 
 const legacyBindingDefaultPlatform = "wechat"
 
+// v15 persists the last terminal result shown for each thread on a frontend route.
 // v14 persists a separate preparing -> ready frontend-attach transaction. Its revision is
 // independent from terminal-delivery authorization, so reselecting the same endpoint can
 // invalidate stale observer callbacks without discarding the durable turn cursor.
@@ -127,7 +129,7 @@ const legacyBindingDefaultPlatform = "wechat"
 // v8 added long-lived Feishu follower endpoints, release/archive tombstones, and the predecessor
 // thread needed to repair first-turn outbox metadata after a crash. Codex writer authority belongs to
 // the single app-server and is never assigned to a message route.
-const codexSessionStateVersion = 14
+const codexSessionStateVersion = 15
 
 func clearCodexFollowerTurnState(binding *codexSessionBinding) {
 	if binding == nil {

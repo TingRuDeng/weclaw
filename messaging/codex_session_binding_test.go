@@ -1044,6 +1044,89 @@ func TestCodexSwitchCommandRendersBindingSemantics(t *testing.T) {
 	}
 }
 
+func TestCodexSwitchCommandShowsIdleResultOncePerTurnAcrossReload(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "codex-sessions.json")
+	setIdleResult := func(f *codexSessionBindingFixture, turnID string, text string) {
+		t.Helper()
+		state := agent.CodexThreadState{
+			ThreadID: "thread-b", LastTurnID: turnID, LastTurnStatus: "completed",
+			LastAgentMessageText: text,
+		}
+		f.ag.setBindingState(state)
+		f.ag.setThreadBinding("thread-b", agent.CodexThreadBinding{
+			Runtime: agent.CodexRuntimeWeClaw, State: state,
+		})
+	}
+	switchThread := func(f *codexSessionBindingFixture) string {
+		t.Helper()
+		return f.h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
+			ctx: context.Background(), userID: f.routeUser, agentName: "codex",
+			workspaceRoot: f.workspaceB, agent: f.ag, target: "thread-b",
+			options: codexSwitchOptions{
+				actorUserID: f.routeUser, platform: platform.PlatformWeChat, reply: f.reply,
+			},
+		})
+	}
+
+	first := newCodexSessionBindingFixture(t)
+	first.h.ensureCodexSessions().SetFilePath(stateFile)
+	setIdleResult(first, "turn-1", "第一次任务结果")
+	if text := switchThread(first); !strings.Contains(text, "第一次任务结果") {
+		t.Fatalf("first switch text=%q, want latest result", text)
+	}
+	if text := switchThread(first); strings.Contains(text, "最近任务:") || strings.Contains(text, "第一次任务结果") {
+		t.Fatalf("repeated switch text=%q, should not repeat the same turn", text)
+	}
+
+	reloaded := newCodexSessionBindingFixture(t)
+	reloaded.h.ensureCodexSessions().SetFilePath(stateFile)
+	setIdleResult(reloaded, "turn-1", "第一次任务结果")
+	if text := switchThread(reloaded); strings.Contains(text, "最近任务:") || strings.Contains(text, "第一次任务结果") {
+		t.Fatalf("reloaded switch text=%q, should preserve presented result cursor", text)
+	}
+
+	setIdleResult(reloaded, "turn-2", "第二次任务结果")
+	if text := switchThread(reloaded); !strings.Contains(text, "第二次任务结果") {
+		t.Fatalf("new turn switch text=%q, want the new latest result", text)
+	}
+}
+
+func TestCodexSwitchCommandDoesNotRepeatIdleResultAfterClaimPersistenceFailure(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.h.ensureCodexSessions().SetFilePath(filepath.Join(t.TempDir(), "codex-sessions.json"))
+	switchThread := func() string {
+		t.Helper()
+		return f.h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
+			ctx: context.Background(), userID: f.routeUser, agentName: "codex",
+			workspaceRoot: f.workspaceB, agent: f.ag, target: "thread-b",
+			options: codexSwitchOptions{
+				actorUserID: f.routeUser, platform: platform.PlatformWeChat, reply: f.reply,
+			},
+		})
+	}
+	if text := switchThread(); strings.Contains(text, "最近任务:") {
+		t.Fatalf("empty target text=%q, should not contain a terminal result", text)
+	}
+	state := agent.CodexThreadState{
+		ThreadID: "thread-b", LastTurnID: "turn-1", LastTurnStatus: "completed",
+		LastAgentMessageText: "写盘失败时的任务结果",
+	}
+	f.ag.setBindingState(state)
+	f.ag.setThreadBinding("thread-b", agent.CodexThreadBinding{
+		Runtime: agent.CodexRuntimeWeClaw, State: state,
+	})
+	f.h.ensureCodexSessions().writeState = func(string, []byte) error {
+		return errors.New("disk full")
+	}
+
+	if text := switchThread(); !strings.Contains(text, "写盘失败时的任务结果") {
+		t.Fatalf("first switch text=%q, want result despite cursor persistence failure", text)
+	}
+	if text := switchThread(); strings.Contains(text, "最近任务:") || strings.Contains(text, "写盘失败时的任务结果") {
+		t.Fatalf("repeated switch text=%q, should retain the presented cursor in memory", text)
+	}
+}
+
 func TestRenderCodexSessionAcquireResultExplainsDeferredDesktopAdoption(t *testing.T) {
 	h := NewHandler(nil, nil)
 	result := codexSessionAcquireResult{
@@ -1109,6 +1192,75 @@ func TestRenderCodexSessionAcquireResultKeepsProgressInDedicatedTaskCard(t *test
 		if strings.Contains(text, duplicate) {
 			t.Fatalf("text=%q, should not repeat %q", text, duplicate)
 		}
+	}
+}
+
+func TestRenderCodexSessionAcquireResultShowsLatestIdleTaskResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		state  agent.CodexThreadState
+		wants  []string
+		absent []string
+	}{
+		{
+			name: "completed",
+			state: agent.CodexThreadState{
+				ThreadID: "thread-1", LastTurnID: "turn-1", LastTurnStatus: "completed",
+				LastAgentMessageText: "旧版服务现在可以通过 --force 完成迁移。",
+			},
+			wants: []string{"最近任务: 已完成", "结果:\n\n旧版服务现在可以通过 --force 完成迁移。"},
+		},
+		{
+			name: "failed",
+			state: agent.CodexThreadState{
+				ThreadID: "thread-1", LastTurnID: "turn-1", LastTurnStatus: "failed",
+				LastTurnError: "构建失败",
+			},
+			wants: []string{"最近任务: 执行失败", "原因: 构建失败"},
+		},
+		{
+			name: "interrupted",
+			state: agent.CodexThreadState{
+				ThreadID: "thread-1", LastTurnID: "turn-1", LastTurnStatus: "interrupted",
+			},
+			wants: []string{"最近任务: 已停止"},
+		},
+		{
+			name:   "empty thread",
+			state:  agent.CodexThreadState{ThreadID: "thread-1"},
+			absent: []string{"最近任务:", "结果:"},
+		},
+		{
+			name: "active turn",
+			state: agent.CodexThreadState{
+				ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-2",
+				LastTurnID: "turn-1", LastTurnStatus: "completed", LastAgentMessageText: "旧结果",
+			},
+			absent: []string{"最近任务:", "旧结果"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewHandler(nil, nil)
+			result := codexSessionAcquireResult{
+				route:          codexConversationRoute{workspaceRoot: "/workspace/project", threadID: "thread-1"},
+				externalState:  externalCodexTaskState{CodexThreadState: tt.state},
+				externalActive: tt.state.Active,
+			}
+
+			text := h.renderCodexSessionAcquireSuccess(result)
+			for _, want := range tt.wants {
+				if !strings.Contains(text, want) {
+					t.Fatalf("text=%q, want %q", text, want)
+				}
+			}
+			for _, absent := range tt.absent {
+				if strings.Contains(text, absent) {
+					t.Fatalf("text=%q, should not contain %q", text, absent)
+				}
+			}
+		})
 	}
 }
 

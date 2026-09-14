@@ -57,6 +57,7 @@ func (s *codexSessionStore) load() {
 		normalized := codexSessionBinding{
 			ActiveWorkspace:           normalizeCodexWorkspaceRoot(binding.ActiveWorkspace),
 			Workspaces:                make(map[string]codexWorkspaceSession),
+			PresentedResultTurns:      make(map[string]string),
 			FollowRevision:            binding.FollowRevision,
 			Follower:                  normalizeCodexFrontendFollower(binding.Follower),
 			FollowerAttachRevision:    binding.FollowerAttachRevision,
@@ -66,6 +67,21 @@ func (s *codexSessionStore) load() {
 			FollowTurnID:              strings.TrimSpace(binding.FollowTurnID),
 			FollowTurnInitialized:     binding.FollowTurnInitialized,
 			FollowTurnPending:         binding.FollowTurnPending,
+		}
+		for persistedThreadID, persistedTurnID := range binding.PresentedResultTurns {
+			threadID := strings.TrimSpace(persistedThreadID)
+			turnID := strings.TrimSpace(persistedTurnID)
+			if threadID == "" || turnID == "" {
+				changed = true
+				continue
+			}
+			if threadID != persistedThreadID || turnID != persistedTurnID {
+				changed = true
+			}
+			normalized.PresentedResultTurns[threadID] = turnID
+		}
+		if len(normalized.PresentedResultTurns) == 0 {
+			normalized.PresentedResultTurns = nil
 		}
 		for workspaceRoot, session := range binding.Workspaces {
 			workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
@@ -185,6 +201,14 @@ func mergeCodexSessionBinding(current codexSessionBinding, incoming codexSession
 	if current.ActiveWorkspace == "" {
 		current.ActiveWorkspace = incoming.ActiveWorkspace
 	}
+	if len(incoming.PresentedResultTurns) > 0 {
+		if current.PresentedResultTurns == nil {
+			current.PresentedResultTurns = make(map[string]string, len(incoming.PresentedResultTurns))
+		}
+		for threadID, turnID := range incoming.PresentedResultTurns {
+			current.PresentedResultTurns[threadID] = turnID
+		}
+	}
 	if incoming.FollowRevision > current.FollowRevision ||
 		incoming.FollowRevision == current.FollowRevision && incoming.Follower != nil && current.Follower == nil {
 		current.FollowRevision = incoming.FollowRevision
@@ -260,7 +284,8 @@ func (s *codexSessionStore) snapshotCodexSessionState() (string, codexSessionSta
 		}
 		state.Bindings[key] = codexSessionBinding{
 			ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces,
-			FollowRevision: binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
+			PresentedResultTurns: cloneCodexPresentedResultTurns(binding.PresentedResultTurns),
+			FollowRevision:       binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
 			FollowerAttachRevision:    binding.FollowerAttachRevision,
 			FollowerAttachPhase:       binding.FollowerAttachPhase,
 			FollowerAttachTurnID:      strings.TrimSpace(binding.FollowerAttachTurnID),

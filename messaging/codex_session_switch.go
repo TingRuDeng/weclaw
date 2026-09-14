@@ -184,11 +184,55 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 			lines = append(lines, renderExternalCodexActiveNotice(result.externalState)...)
 		}
 	}
+	if !result.suppressLatestIdleResult {
+		lines = append(lines, renderLatestIdleCodexTaskResult(latestIdleCodexState(result))...)
+	}
+	if result.latestIdleResultClaimErr != nil {
+		log.Printf("[codex-session-bind] 保存最近任务展示状态失败 thread=%q: %v", result.route.threadID, result.latestIdleResultClaimErr)
+	}
 	if result.agentSessionErr != nil {
 		log.Printf("[codex-session-acquire] 保存当前窗口 Agent 失败 thread=%q: %v", result.route.threadID, result.agentSessionErr)
 		lines = append(lines, "警告: 保存当前窗口 Agent 失败，请重试。")
 	}
 	return wechatCommandText(lines...)
+}
+
+const latestIdleCodexTaskResultRunes = 800
+
+func latestIdleCodexState(result codexSessionAcquireResult) agent.CodexThreadState {
+	state := result.externalState.CodexThreadState
+	if !result.externalActive && strings.TrimSpace(state.LastTurnID) == "" {
+		state = result.resolution.Binding.State
+	}
+	return state
+}
+
+func renderLatestIdleCodexTaskResult(state agent.CodexThreadState) []string {
+	if state.Active || strings.TrimSpace(state.LastTurnID) == "" {
+		return nil
+	}
+	status := strings.ToLower(strings.TrimSpace(state.LastTurnStatus))
+	switch status {
+	case "completed":
+		text := firstNonBlank(
+			strings.TrimSpace(state.LastAgentMessageText),
+			"Codex App 本地任务已完成，但没有返回文本。",
+		)
+		return []string{
+			"最近任务: 已完成",
+			"结果:\n" + truncateRunes(text, latestIdleCodexTaskResultRunes),
+		}
+	case "failed", "error":
+		reason := firstNonBlank(strings.TrimSpace(state.LastTurnError), "Codex 本地任务执行失败")
+		return []string{
+			"最近任务: 执行失败",
+			"原因: " + truncateRunes(reason, latestIdleCodexTaskResultRunes),
+		}
+	case "interrupted", "cancelled", "canceled":
+		return []string{"最近任务: 已停止"}
+	default:
+		return nil
+	}
 }
 
 func renderCodexRuntimeRecoveryNotice(err error) []string {
