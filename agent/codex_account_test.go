@@ -41,6 +41,18 @@ func TestCodexAccountMutationsRejectWhileTurnAdmissionIsInProgress(t *testing.T)
 	}
 }
 
+func TestCodexAccountSwitchContextSurvivesCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	switchCtx, release := codexAccountSwitchContext(ctx)
+	defer release()
+	cancel()
+	select {
+	case <-switchCtx.Done():
+		t.Fatalf("durable switch context canceled with caller: %v", switchCtx.Err())
+	default:
+	}
+}
+
 func (f *accountTestKeyring) Get(service, user string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -58,7 +58,7 @@ func artifactCandidatePath(dir string, baseName string, ext string, sequence int
 }
 
 func createExclusiveArtifact(path string) (*os.File, bool, error) {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return nil, true, nil
 	}

@@ -41,6 +41,7 @@ type feishuStream struct {
 	pendingTimer            *time.Timer
 	pendingGeneration       uint64
 	pendingPresentation     platform.StreamPresentation
+	pendingPresentationCtx  context.Context
 	hasPendingPresentation  bool
 	presentationTimer       *time.Timer
 	cardJSONSoftLimitBytes  int
@@ -116,6 +117,7 @@ func (s *feishuStream) UpdatePresentation(ctx context.Context, p platform.Stream
 	}
 	if delay := s.throttleDelay(s.now()); delay > 0 {
 		s.pendingPresentation, s.hasPendingPresentation = p, true
+		s.pendingPresentationCtx = ctx
 		if s.presentationTimer == nil {
 			s.presentationTimer = time.AfterFunc(delay, func() { s.flushPresentation() })
 		}
@@ -134,10 +136,15 @@ func (s *feishuStream) flushPresentation() {
 		return
 	}
 	p := s.pendingPresentation
+	ctx := s.pendingPresentationCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.hasPendingPresentation = false
+	s.pendingPresentationCtx = nil
 	s.presentationTimer = nil
 	s.mu.Unlock()
-	if err := s.updatePresentationNow(context.Background(), p); err != nil {
+	if err := s.updatePresentationNow(ctx, p); err != nil {
 		log.Printf("[feishu] failed to flush presentation: %v", err)
 	}
 }
@@ -616,6 +623,7 @@ func (s *feishuStream) cancelPendingPresentation() {
 	}
 	s.presentationTimer = nil
 	s.pendingPresentation = platform.StreamPresentation{}
+	s.pendingPresentationCtx = nil
 	s.hasPendingPresentation = false
 }
 
@@ -1169,7 +1177,7 @@ func ignoreCardKitUpdateError(err error) error {
 		return err
 	}
 	switch code {
-	case 200400, 200740, 200810, 200937, 300317:
+	case 200400, 200740, 200810, 200937:
 		return nil
 	default:
 		return err

@@ -12,11 +12,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/fastclaw-ai/weclaw/messaging"
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
 const maxSendRequestBytes = 1 * 1024 * 1024
+
+const publicSendFailureMessage = "消息发送失败，请稍后重试"
 
 // SendRequest 是 POST /api/send 的 JSON 请求体。
 type SendRequest struct {
@@ -57,16 +60,17 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.sendRequest(r.Context(), reply, req)
 	if err != nil {
+		log.Printf("[api] send failed: %s", observability.SanitizeText(err.Error()))
 		if result.textSent || result.mediaSent {
 			writeJSONStatus(w, http.StatusMultiStatus, partialSendResponse{
 				Status:    "partial",
 				TextSent:  result.textSent,
 				MediaSent: result.mediaSent,
-				Error:     err.Error(),
+				Error:     publicSendFailureMessage,
 			})
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, publicSendFailureMessage, http.StatusInternalServerError)
 		return
 	}
 	writeJSONResponse(w, map[string]string{"status": "ok"})

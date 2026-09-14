@@ -11,9 +11,11 @@ import (
 var Version = "dev"
 
 var rootCmd = &cobra.Command{
-	Use:   "weclaw",
-	Short: "WeClaw 连接微信、飞书和 AI Agent",
-	Long:  "WeClaw 连接微信、飞书和 AI Agent，把聊天消息转给 Codex、Claude 等 Agent。",
+	Use:           "weclaw",
+	Short:         "WeClaw 连接微信、飞书和 AI Agent",
+	Long:          "WeClaw 连接微信、飞书和 AI Agent，把聊天消息转给 Codex、Claude 等 Agent。",
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	CompletionOptions: cobra.CompletionOptions{
 		HiddenDefaultCmd: true,
 	},

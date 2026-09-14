@@ -41,6 +41,7 @@ type Monitor struct {
 	queuesMu        sync.Mutex
 	queues          map[string]chan queuedWeixinMessage
 	aggregateWindow time.Duration
+	dispatchAsync   bool
 }
 
 // NewMonitor creates a new long-poll monitor.
@@ -56,11 +57,12 @@ func NewMonitor(client *Client, handler MessageHandler) (*Monitor, error) {
 	bufPath := filepath.Join(home, "accounts", accountID+".sync.json")
 
 	m := &Monitor{
-		client:       client,
-		handler:      handler,
-		bufPath:      bufPath,
-		lastActivity: time.Now(),
-		queues:       make(map[string]chan queuedWeixinMessage),
+		client:        client,
+		handler:       handler,
+		bufPath:       bufPath,
+		lastActivity:  time.Now(),
+		queues:        make(map[string]chan queuedWeixinMessage),
+		dispatchAsync: true,
 	}
 	m.loadBuf()
 	return m, nil

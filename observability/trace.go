@@ -208,19 +208,45 @@ func EventFor(trace TraceContext, stage string, state string) Event {
 
 var (
 	bearerPattern           = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]+`)
-	secretAssignmentPattern = regexp.MustCompile(`(?i)["']?\b(access_token|refresh_token|id_token|api[_-]?key|authorization|cookie|password|secret|token)\b["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)`)
+	secretAssignmentPattern = regexp.MustCompile(`(?i)(["']?[a-z0-9][a-z0-9_-]*["']?)\s*[:=：＝]\s*(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)`)
 	jwtPattern              = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}(?:\.[a-zA-Z0-9_-]{4,})?\b`)
+	providerTokenPattern    = regexp.MustCompile(`\b(?:sk-[a-zA-Z0-9_-]{8,}|gh[pousr]_[a-zA-Z0-9_-]{8,}|xox[baprs]-[a-zA-Z0-9-]{8,}|AKIA[0-9A-Z]{12,})\b`)
+	pemPrivateKeyPattern    = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]+ KEY-----.*?-----END [A-Z0-9 ]+ KEY-----`)
+	urlCredentialPattern    = regexp.MustCompile(`(?i)(https?://[^/\s:@]+:)[^@\s]+(@)`)
 )
 
 // SanitizeText 清理常见凭据并限制单条诊断摘要长度。
 func SanitizeText(text string) string {
 	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	text = strings.NewReplacer("：", ":", "＝", "=").Replace(text)
 	text = bearerPattern.ReplaceAllString(text, "Bearer [REDACTED]")
-	text = secretAssignmentPattern.ReplaceAllString(text, "$1=[REDACTED]")
+	text = secretAssignmentPattern.ReplaceAllStringFunc(text, func(match string) string {
+		submatches := secretAssignmentPattern.FindStringSubmatch(match)
+		if len(submatches) < 2 || !isSensitiveAssignmentKey(submatches[1]) {
+			return match
+		}
+		return strings.Trim(submatches[1], "\"'") + "=[REDACTED]"
+	})
 	text = jwtPattern.ReplaceAllString(text, "[REDACTED_JWT]")
+	text = providerTokenPattern.ReplaceAllString(text, "[REDACTED_TOKEN]")
+	text = pemPrivateKeyPattern.ReplaceAllString(text, "[REDACTED_PRIVATE_KEY]")
+	text = urlCredentialPattern.ReplaceAllString(text, "$1[REDACTED]$2")
 	runes := []rune(text)
 	if len(runes) > traceSummaryMaxRunes {
 		return string(runes[:traceSummaryMaxRunes]) + "…"
 	}
 	return text
+}
+
+func isSensitiveAssignmentKey(raw string) bool {
+	key := strings.ToLower(strings.Trim(raw, "\"'"))
+	key = strings.ReplaceAll(key, "-", "_")
+	for _, sensitive := range []string{
+		"access_token", "refresh_token", "id_token", "api_key", "authorization", "cookie", "password", "secret", "token",
+	} {
+		if key == sensitive || strings.HasSuffix(key, "_"+sensitive) {
+			return true
+		}
+	}
+	return false
 }

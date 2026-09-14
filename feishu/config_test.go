@@ -273,6 +273,15 @@ func TestValidateCredentialsPostsAppCredentials(t *testing.T) {
 	}
 }
 
+func TestFeishuHTTPClientsHaveBoundedTimeouts(t *testing.T) {
+	if feishuValidationHTTPClient == nil || feishuValidationHTTPClient.Timeout <= 0 {
+		t.Fatal("credential validation HTTP client must have a bounded timeout")
+	}
+	if feishuSDKRequestTimeout <= 0 {
+		t.Fatal("Feishu SDK request timeout must be positive")
+	}
+}
+
 func TestValidateCredentialsErrorDoesNotExposeSecret(t *testing.T) {
 	oldURL := tenantTokenURL
 	defer func() { tenantTokenURL = oldURL }()

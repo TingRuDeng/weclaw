@@ -55,7 +55,11 @@ func (a *ACPAgent) prepareCodexThreadProviderLocked(ctx context.Context, req Cod
 	if err != nil {
 		return result, fmt.Errorf("解析 CODEX_HOME: %w", err)
 	}
-	stateRow, err := readCodexProviderStateRow(ctx, filepath.Join(codexHome, "state_5.sqlite"), threadID)
+	sqliteHome, err := a.resolveCodexSQLiteHome(codexHome)
+	if err != nil {
+		return result, err
+	}
+	stateRow, err := readCodexProviderStateRow(ctx, filepath.Join(sqliteHome, "state_5.sqlite"), threadID)
 	if err != nil {
 		return result, err
 	}
@@ -146,7 +150,7 @@ func (a *ACPAgent) prepareCodexThreadProviderLocked(ctx context.Context, req Cod
 		}
 	}
 	migration, migrationErr := migrate(ctx, codexProviderMigrationRequest{
-		CodexHome: codexHome, ThreadID: threadID, TargetProvider: provider,
+		CodexHome: codexHome, SQLiteHome: sqliteHome, ThreadID: threadID, TargetProvider: provider,
 	})
 	if migrationErr != nil {
 		restartErr := a.restartCodexProviderHost(ctx, mode, socketPath, req)

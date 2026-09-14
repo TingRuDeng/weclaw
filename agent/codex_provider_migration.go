@@ -43,6 +43,7 @@ var codexResponseItemPrefixes = map[string]string{
 
 type codexProviderMigrationRequest struct {
 	CodexHome      string
+	SQLiteHome     string
 	ThreadID       string
 	TargetProvider string
 }
@@ -87,10 +88,17 @@ type codexProviderMigrationManifest struct {
 
 func migrateCodexThreadProvider(ctx context.Context, req codexProviderMigrationRequest) (codexProviderMigrationResult, error) {
 	req.CodexHome = filepath.Clean(strings.TrimSpace(req.CodexHome))
+	req.SQLiteHome = filepath.Clean(strings.TrimSpace(req.SQLiteHome))
 	req.ThreadID = strings.TrimSpace(req.ThreadID)
 	req.TargetProvider = strings.TrimSpace(req.TargetProvider)
 	if !filepath.IsAbs(req.CodexHome) {
 		return codexProviderMigrationResult{}, fmt.Errorf("CODEX_HOME 必须是绝对路径")
+	}
+	if req.SQLiteHome == "." || req.SQLiteHome == "" {
+		req.SQLiteHome = req.CodexHome
+	}
+	if !filepath.IsAbs(req.SQLiteHome) {
+		return codexProviderMigrationResult{}, fmt.Errorf("CODEX_SQLITE_HOME 必须是绝对路径")
 	}
 	if !codexThreadIDPattern.MatchString(req.ThreadID) {
 		return codexProviderMigrationResult{}, fmt.Errorf("Codex thread ID 含有不安全字符")
@@ -102,7 +110,7 @@ func migrateCodexThreadProvider(ctx context.Context, req codexProviderMigrationR
 		return codexProviderMigrationResult{}, err
 	}
 
-	stateDB := filepath.Join(req.CodexHome, "state_5.sqlite")
+	stateDB := filepath.Join(req.SQLiteHome, "state_5.sqlite")
 	if err := validateCodexProviderFile(stateDB); err != nil {
 		return codexProviderMigrationResult{}, fmt.Errorf("验证 Codex thread 数据库: %w", err)
 	}
@@ -134,7 +142,7 @@ func migrateCodexThreadProvider(ctx context.Context, req codexProviderMigrationR
 	}
 	result.Transform = transformResult
 
-	catalogDB := filepath.Join(req.CodexHome, "sqlite", "codex-dev.db")
+	catalogDB := filepath.Join(req.SQLiteHome, "sqlite", "codex-dev.db")
 	catalogRows, catalogAvailable, err := readCodexProviderCatalogRows(ctx, catalogDB, req.ThreadID)
 	if err != nil {
 		return result, err

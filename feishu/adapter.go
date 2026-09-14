@@ -62,7 +62,12 @@ type Adapter struct {
 
 // NewAdapter 创建飞书平台 adapter。
 func NewAdapter(creds Credentials) *Adapter {
-	restClient := lark.NewClient(creds.AppID, creds.AppSecret, lark.WithLogger(silentFeishuSDKLogger{}))
+	restClient := lark.NewClient(
+		creds.AppID,
+		creds.AppSecret,
+		lark.WithLogger(silentFeishuSDKLogger{}),
+		lark.WithReqTimeout(feishuSDKRequestTimeout),
+	)
 	adapter := &Adapter{
 		creds:               creds,
 		downloader:          newSDKResourceDownloader(restClient, creds.AppID),

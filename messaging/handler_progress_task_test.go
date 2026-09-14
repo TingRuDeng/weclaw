@@ -62,7 +62,7 @@ func TestStartProgressSessionDefaultTypingModeDoesNotSendTextFeedback(t *testing
 	}
 }
 
-func TestStartProgressSessionStreamModeSendsLastStatusLine(t *testing.T) {
+func TestStartProgressSessionStreamModeDowngradesForWeChat(t *testing.T) {
 	h := NewHandler(nil, nil)
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
@@ -76,11 +76,11 @@ func TestStartProgressSessionStreamModeSendsLastStatusLine(t *testing.T) {
 	onProgress, stop := h.startProgressSession(context.Background(), reply, "", "修复实时回复碎片化", cfg)
 
 	onProgress("第一段\n第二段\n第三段")
-	waitForText(t, calls, "第三段")
+	waitForText(t, calls, "处理中，请耐心等待")
 	stop()
 
 	if containsText(calls.texts(), "第一段") {
-		t.Fatalf("stream progress should not send old lines, messages=%#v", calls.texts())
+		t.Fatalf("downgraded progress should not send raw lines, messages=%#v", calls.texts())
 	}
 	if containsText(calls.texts(), "实时状态") {
 		t.Fatalf("stream progress should not wrap latest line, messages=%#v", calls.texts())
@@ -107,7 +107,7 @@ func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "codex", message: "hello", clientID: "client-1"})
 
-	waitForText(t, calls, "第三段")
+	waitForText(t, calls, "处理中，请耐心等待")
 	if containsText(calls.texts(), "实时状态") {
 		t.Fatalf("stream progress should not wrap latest line, messages=%#v", calls.texts())
 	}

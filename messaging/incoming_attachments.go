@@ -195,7 +195,7 @@ func (h *Handler) handleImageAttachmentSave(ctx context.Context, userID string, 
 		return
 	}
 	ext := detectImageExt(data)
-	if err := os.MkdirAll(saveDir, 0o755); err != nil {
+	if err := os.MkdirAll(saveDir, 0o700); err != nil {
 		log.Printf("[handler] failed to create save dir: %v", err)
 		sendPlatformText(ctx, reply, userID, fmt.Sprintf("Failed to save image: %v", err))
 		return

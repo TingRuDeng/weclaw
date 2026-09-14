@@ -15,7 +15,10 @@ import (
 
 const acpStdinWriteTimeout = 10 * time.Second
 
-var errACPWriteMayHaveDelivered = errors.New("ACP request may have been partially delivered")
+var (
+	errACPWriteMayHaveDelivered = errors.New("ACP request may have been partially delivered")
+	errACPRuntimeExited         = errors.New("ACP runtime exited before response")
+)
 
 type acpWriteDeadlineSetter interface {
 	SetWriteDeadline(time.Time) error

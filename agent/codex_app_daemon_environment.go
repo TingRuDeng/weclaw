@@ -83,6 +83,18 @@ func codexAgentEnvironmentValue(environment map[string]string, name string) stri
 	return strings.TrimSpace(os.Getenv(name))
 }
 
+func (a *ACPAgent) resolveCodexSQLiteHome(codexHome string) (string, error) {
+	codexHome = filepath.Clean(strings.TrimSpace(codexHome))
+	if !filepath.IsAbs(codexHome) {
+		return "", fmt.Errorf("CODEX_HOME 必须是绝对路径")
+	}
+	raw := codexAgentEnvironmentValue(a.env, codexAppSQLiteHomeEnv)
+	if strings.TrimSpace(raw) == "" {
+		return codexHome, nil
+	}
+	return normalizeCodexAbsoluteEnvironmentPath(codexAppSQLiteHomeEnv, raw)
+}
+
 func normalizeOptionalCodexEnvironmentPath(name, value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {

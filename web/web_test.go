@@ -140,6 +140,19 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 }
 
+func TestAuthMiddlewareRejectsNonLoopbackHostWithoutToken(t *testing.T) {
+	s := NewServer(Options{Addr: "127.0.0.1:39282"})
+	mux := http.NewServeMux()
+	s.routes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req.Host = "weclaw.attacker.example"
+	rec := httptest.NewRecorder()
+	s.guard(mux).ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%q, want forbidden", rec.Code, rec.Body.String())
+	}
+}
+
 func TestWebResponsesSetSensitiveSecurityHeaders(t *testing.T) {
 	s := NewServer(Options{Addr: "127.0.0.1:39282", Token: "secret"})
 	mux := http.NewServeMux()

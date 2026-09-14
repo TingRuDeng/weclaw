@@ -348,6 +348,9 @@ func (a *ACPAgent) stopManagedCodexHostLocked(ctx context.Context, socketPath st
 		return err
 	}
 	if a.usesOfficialCodexDaemon() {
+		if _, err := a.validateManagedCodexHost(socketPath); err != nil {
+			return fmt.Errorf("revalidate managed Codex Host before daemon stop: %w", err)
+		}
 		if err := a.validateCodexDaemonManagement(ctx, socketPath, metadata); err != nil {
 			return err
 		}
@@ -375,12 +378,21 @@ func (a *ACPAgent) stopManagedCodexHostLocked(ctx context.Context, socketPath st
 	a.failAppServerActiveTurns("Codex app-server stopped for account switch")
 	a.failPendingRequests("Codex app-server stopped for account switch")
 	if ownedCmd != nil && ownedCmd.Process != nil && ownedCmd.Process.Pid == metadata.PID {
+		if _, err := a.validateManagedCodexHost(socketPath); err != nil {
+			return fmt.Errorf("revalidate managed Codex Host before process stop: %w", err)
+		}
 		stopCodexHostProcess(ownedCmd, ownedDone)
 	} else {
+		if _, err := a.validateManagedCodexHost(socketPath); err != nil {
+			return fmt.Errorf("revalidate managed Codex Host before signal: %w", err)
+		}
 		if err := syscall.Kill(-metadata.ProcessGroupID, syscall.SIGINT); err != nil && !errors.Is(err, syscall.ESRCH) {
 			return fmt.Errorf("stop managed codex host: %w", err)
 		}
 		if err := waitCodexHostProcessExit(ctx, metadata.PID, acpKillGrace); err != nil {
+			if _, validateErr := a.validateManagedCodexHost(socketPath); validateErr != nil {
+				return fmt.Errorf("managed Codex Host identity changed before kill escalation: %w", validateErr)
+			}
 			if killErr := syscall.Kill(-metadata.ProcessGroupID, syscall.SIGKILL); killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
 				return fmt.Errorf("kill managed codex host: %w", killErr)
 			}

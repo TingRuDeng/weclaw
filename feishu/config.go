@@ -10,15 +10,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	weclawconfig "github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
 
 const (
-	envAppID     = "WECLAW_FEISHU_APP_ID"
-	envAppSecret = "WECLAW_FEISHU_APP_SECRET"
+	envAppID                = "WECLAW_FEISHU_APP_ID"
+	envAppSecret            = "WECLAW_FEISHU_APP_SECRET"
+	feishuSDKRequestTimeout = 15 * time.Second
 )
+
+var feishuValidationHTTPClient = &http.Client{Timeout: feishuSDKRequestTimeout}
 
 var tenantTokenURL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 
@@ -159,7 +163,7 @@ func ValidateCredentials(ctx context.Context, creds Credentials) error {
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := feishuValidationHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("validate feishu credentials: %w", err)
 	}

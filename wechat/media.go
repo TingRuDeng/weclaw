@@ -3,6 +3,7 @@ package wechat
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"os"
@@ -14,6 +15,8 @@ import (
 
 var uploadFileToCDN = UploadFileToCDN
 
+const maxLocalMediaBytes = 50 << 20
+
 // SendMediaFromURL 下载远程媒体后通过微信 CDN 发送，URL 安全校验在下载前完成。
 func (r *Replier) SendMediaFromURL(ctx context.Context, mediaURL string) error {
 	data, contentType, err := downloadFile(ctx, mediaURL)
@@ -24,9 +27,17 @@ func (r *Replier) SendMediaFromURL(ctx context.Context, mediaURL string) error {
 }
 
 func (r *Replier) sendMediaFromPath(ctx context.Context, path string) error {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxLocalMediaBytes+1))
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	if len(data) > maxLocalMediaBytes {
+		return fmt.Errorf("media file exceeds %d byte limit", maxLocalMediaBytes)
 	}
 	return r.sendMediaData(ctx, filepath.Base(path), path, data, inferContentType(path))
 }

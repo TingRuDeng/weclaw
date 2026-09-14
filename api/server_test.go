@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -493,6 +494,25 @@ func TestHandleSendLogDoesNotContainMessageBody(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "top-secret-message") {
 		t.Fatalf("API log contains message body: %q", logs.String())
+	}
+}
+
+func TestHandleSendDoesNotExposeProviderError(t *testing.T) {
+	reply := &recordingReplier{mediaErr: errors.New("provider failed app_secret=synthetic-secret")}
+	registry := platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: reply},
+		Access:   platform.NewAccessControl([]string{"ignored"}),
+	}})
+	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"platform":"feishu","account_id":"cli_a","to":"ou_user","media_url":"https://example.com/a.png"}`))
+	req.Host = "127.0.0.1:18011"
+	rec := httptest.NewRecorder()
+	server.handleSend(rec, req)
+	if strings.Contains(rec.Body.String(), "synthetic-secret") || strings.Contains(rec.Body.String(), "app_secret") {
+		t.Fatalf("provider error leaked in response: %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), publicSendFailureMessage) {
+		t.Fatalf("response=%q, want public failure message", rec.Body.String())
 	}
 }
 

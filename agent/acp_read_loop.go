@@ -248,6 +248,12 @@ func (a *ACPAgent) finishReadLoop(scanner *bufio.Scanner, epoch uint64, waitErr 
 	} else if waitErr != nil {
 		exitReason = fmt.Sprintf("ACP runtime exited: %v", waitErr)
 	}
+	if cause == nil {
+		// A clean EOF is still ambiguous for an in-flight turn/start or
+		// turn/steer: the shared Host may have accepted the request before
+		// its response was lost.
+		cause = errACPRuntimeExited
+	}
 	a.wireDispatchMu.Lock()
 	a.mu.Lock()
 	currentScanner := a.scanner == scanner && a.wireEpoch == epoch

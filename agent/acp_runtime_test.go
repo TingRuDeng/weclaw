@@ -342,6 +342,30 @@ func TestACPReadLoopClassifiesOversizedProtocolFrame(t *testing.T) {
 	}
 }
 
+func TestACPReadLoopMarksInputDeliveryUnknownOnCleanExit(t *testing.T) {
+	scanner := bufio.NewScanner(strings.NewReader(""))
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	writer := &signalingACPWriteCloser{written: make(chan struct{})}
+	a.stdin = writer
+	a.scanner = scanner
+	a.wireEpoch = 1
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := a.callWithSequence(context.Background(), "turn/start", map[string]interface{}{"threadId": "thread-clean-exit"})
+		done <- err
+	}()
+	select {
+	case <-writer.written:
+	case <-time.After(time.Second):
+		t.Fatal("turn/start request was not written")
+	}
+
+	a.finishReadLoop(scanner, 1, nil)
+	if err := <-done; !errors.Is(err, ErrCodexInputDeliveryUnknown) {
+		t.Fatalf("call error=%v, want ErrCodexInputDeliveryUnknown", err)
+	}
+}
+
 func TestFormatRPCErrorMessageUsesStructuredData(t *testing.T) {
 	err := &rpcError{
 		Code:    -32000,

@@ -318,6 +318,15 @@ func (a *ACPAgent) DoctorCodexAccounts(ctx context.Context) codexauth.DoctorResu
 	return result
 }
 
+const codexAccountSwitchTimeout = 2 * time.Minute
+
+func codexAccountSwitchContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), codexAccountSwitchTimeout)
+}
+
 func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expectedRevision uint64) (result CodexAccountSwitchResult, err error) {
 	if capabilityErr := a.requireCodexSharedHostCapability("切换运行账号"); capabilityErr != nil {
 		return result, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "请先在 Codex App 中切换账号", capabilityErr)
@@ -470,8 +479,10 @@ func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expect
 			return err
 		}
 		available = false
+		switchCtx, switchCancel := codexAccountSwitchContext(ctx)
+		defer switchCancel()
 
-		if err := a.stopManagedHost(ctx, store.SocketPath()); err != nil {
+		if err := a.stopManagedHost(switchCtx, store.SocketPath()); err != nil {
 			return codexauth.NewError(codexauth.CodeRuntimeUnavailable, "无法确认 Codex Host 已安全停止；当前已禁止继续写入", err)
 		}
 		hostStopped := true
@@ -479,7 +490,7 @@ func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expect
 			reportCodexAccountSwitchProgress(ctx, CodexAccountSwitchRollback)
 			usageRestoreErr := tx.RestoreProfileUsage(target)
 			activeRestoreErr := tx.RestoreActive(index.ActiveProfileID)
-			rollbackErr := a.rollbackCodexAccountSwitch(ctx, store, liveSnapshot, previous)
+			rollbackErr := a.rollbackCodexAccountSwitch(switchCtx, store, liveSnapshot, previous)
 			if usageRestoreErr != nil || activeRestoreErr != nil || rollbackErr != nil {
 				tx.SetLastSwitch(codexauth.SwitchRecord{ProfileID: index.ActiveProfileID, Status: "rollback_failed", Message: "账号切换失败且旧运行时恢复失败", At: time.Now()})
 				recordErr := tx.Flush()
@@ -500,18 +511,18 @@ func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expect
 			}
 			return err
 		}
-		if err := a.startManagedHost(ctx, store.SocketPath()); err != nil {
+		if err := a.startManagedHost(switchCtx, store.SocketPath()); err != nil {
 			return rollback(codexauth.NewError(codexauth.CodeRuntimeUnavailable, "目标账号的 Codex Host 启动失败", err))
 		}
 		reportCodexAccountSwitchProgress(ctx, CodexAccountSwitchVerifying)
-		verified, verifyErr := a.readCodexAccount(ctx, false)
+		verified, verifyErr := a.readCodexAccount(switchCtx, false)
 		if verifyErr != nil {
 			return rollback(verifyErr)
 		}
 		if !targetSnapshot.MatchesEmail(verified.Email) {
 			return rollback(codexauth.NewError(codexauth.CodeTargetMismatch, "启动后的 Codex Host 不是目标账号", nil))
 		}
-		quota, quotaErr := a.ReadCodexQuota(ctx)
+		quota, quotaErr := a.ReadCodexQuota(switchCtx)
 		if quotaErr != nil {
 			return rollback(codexauth.NewError(codexauth.CodeRuntimeUnavailable, "目标账号额度验证失败", quotaErr))
 		}

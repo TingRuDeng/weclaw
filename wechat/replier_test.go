@@ -265,3 +265,31 @@ func TestReplierSendImageUploadsAndSendsImageItem(t *testing.T) {
 		t.Fatalf("image item=%#v", item.ImageItem)
 	}
 }
+
+func TestReplierSendImageRejectsOversizedLocalFile(t *testing.T) {
+	client, _, closeServer := newRecordingClient(t)
+	defer closeServer()
+	imagePath := filepath.Join(t.TempDir(), "oversized.png")
+	file, err := os.Create(imagePath)
+	if err != nil {
+		t.Fatalf("create image: %v", err)
+	}
+	if err := file.Truncate(maxLocalMediaBytes + 1); err != nil {
+		file.Close()
+		t.Fatalf("truncate image: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close image: %v", err)
+	}
+
+	originalUpload := uploadFileToCDN
+	t.Cleanup(func() { uploadFileToCDN = originalUpload })
+	uploadFileToCDN = func(context.Context, *ilink.Client, []byte, string, int) (*UploadedFile, error) {
+		t.Fatal("oversized media must be rejected before upload")
+		return nil, nil
+	}
+	reply := NewReplier(client, "user-1", "ctx-1", "client-1")
+	if err := reply.SendImage(context.Background(), imagePath); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("SendImage error=%v, want size limit error", err)
+	}
+}

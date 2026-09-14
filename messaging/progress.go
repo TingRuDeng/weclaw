@@ -226,6 +226,10 @@ func (h *Handler) startProgressSessionForWorkspaceAgentWithGuardAndSnapshot(ctx 
 		return func(string) {}, func(string, bool) bool { return false }, nil
 	}
 	reply = progressReplier(reply)
+	if reply == nil {
+		return func(string) {}, func(string, bool) bool { return false }, nil
+	}
+	cfg = normalizeProgressConfigForCapabilities(cfg, reply.Capabilities())
 
 	progressCtx, cancel := context.WithCancel(ctx)
 	session := &progressSession{
@@ -978,7 +982,7 @@ func (s *progressSession) ensureStream() platform.Stream {
 }
 
 func (s *progressSession) ensureStreamLocked() platform.Stream {
-	if s.stream != nil || s.streamOpenAttempted || !progressModeAllowsProgress(s.cfg.Mode) {
+	if s.stream != nil || s.streamOpenAttempted || !progressModeAllowsProgress(s.cfg.Mode) || !s.reply.Capabilities().Streaming {
 		return s.stream
 	}
 	s.streamOpenAttempted = true

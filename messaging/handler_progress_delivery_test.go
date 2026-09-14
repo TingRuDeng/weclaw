@@ -251,11 +251,11 @@ func TestBroadcastProgressUsesAgentPrefix(t *testing.T) {
 		message:      "hello",
 	})
 
-	if !containsText(calls.texts(), "[codex] codex delta") {
-		t.Fatalf("expected codex progress prefix, messages=%#v", calls.texts())
+	if !containsText(calls.texts(), "[codex] 处理中，请耐心等待") {
+		t.Fatalf("expected bounded codex progress summary, messages=%#v", calls.texts())
 	}
-	if !containsText(calls.texts(), "[claude] claude delta") {
-		t.Fatalf("expected claude progress prefix, messages=%#v", calls.texts())
+	if !containsText(calls.texts(), "[claude] 处理中，请耐心等待") {
+		t.Fatalf("expected bounded claude progress summary, messages=%#v", calls.texts())
 	}
 }
 

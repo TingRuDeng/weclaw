@@ -124,6 +124,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSensitiveResponseHeaders(w)
+		if s.token == "" && !isLoopbackHostAuthority(r.Host) {
+			http.Error(w, "forbidden host", http.StatusForbidden)
+			return
+		}
 		if !s.sameOrigin(r) {
 			http.Error(w, "forbidden origin", http.StatusForbidden)
 			return
@@ -143,6 +147,20 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isLoopbackHostAuthority(authority string) bool {
+	authority = strings.TrimSpace(authority)
+	host, _, err := net.SplitHostPort(authority)
+	if err != nil {
+		host = strings.Trim(authority, "[]")
+	}
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (s *Server) authorized(r *http.Request) bool {

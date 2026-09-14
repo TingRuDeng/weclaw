@@ -40,6 +40,30 @@ func TestResolveCodexAppDaemonEnvironmentRejectsRelativeSQLiteHome(t *testing.T)
 	}
 }
 
+func TestResolveCodexSQLiteHomeUsesConfiguredOverride(t *testing.T) {
+	t.Setenv(codexAppSQLiteHomeEnv, "")
+	a := &ACPAgent{env: map[string]string{codexAppSQLiteHomeEnv: "/tmp/codex-sqlite"}}
+	got, err := a.resolveCodexSQLiteHome("/tmp/codex-home")
+	if err != nil {
+		t.Fatalf("resolveCodexSQLiteHome() error = %v", err)
+	}
+	if got != "/tmp/codex-sqlite" {
+		t.Fatalf("sqlite home = %q, want configured override", got)
+	}
+}
+
+func TestResolveCodexSQLiteHomeDefaultsToCodexHome(t *testing.T) {
+	t.Setenv(codexAppSQLiteHomeEnv, "")
+	a := &ACPAgent{env: map[string]string{}}
+	got, err := a.resolveCodexSQLiteHome("/tmp/codex-home")
+	if err != nil {
+		t.Fatalf("resolveCodexSQLiteHome() error = %v", err)
+	}
+	if got != "/tmp/codex-home" {
+		t.Fatalf("sqlite home = %q, want CODEX_HOME default", got)
+	}
+}
+
 func TestEnsureCodexAppReusesDaemonRejectsPrivateAppServer(t *testing.T) {
 	enabled := true
 	a := &ACPAgent{

@@ -103,8 +103,9 @@ func (m *Monitor) runMessageQueue(ctx context.Context, key string, queue chan qu
 
 func (m *Monitor) dispatchQueuedMessage(ctx context.Context, queue <-chan queuedWeixinMessage, first queuedWeixinMessage) {
 	if m.aggregateWindow <= 0 || isCommandWeixinMessage(first.message) {
-		m.handler(ctx, m.client, first.message)
+		finished := m.dispatchMessage(ctx, first.message)
 		completeQueuedMessages([]queuedWeixinMessage{first})
+		<-finished
 		return
 	}
 	batch := []queuedWeixinMessage{first}
@@ -128,12 +129,29 @@ func (m *Monitor) dispatchQueuedMessage(ctx context.Context, queue <-chan queued
 }
 
 func (m *Monitor) dispatchQueuedBatch(ctx context.Context, batch []queuedWeixinMessage, command *queuedWeixinMessage) {
-	m.handler(ctx, m.client, aggregateQueuedMessages(batch))
+	finished := []<-chan struct{}{m.dispatchMessage(ctx, aggregateQueuedMessages(batch))}
 	completeQueuedMessages(batch)
 	if command != nil {
-		m.handler(ctx, m.client, command.message)
+		finished = append(finished, m.dispatchMessage(ctx, command.message))
 		completeQueuedMessages([]queuedWeixinMessage{*command})
 	}
+	for _, done := range finished {
+		<-done
+	}
+}
+
+func (m *Monitor) dispatchMessage(ctx context.Context, msg WeixinMessage) <-chan struct{} {
+	done := make(chan struct{})
+	if m.dispatchAsync {
+		go func() {
+			defer close(done)
+			m.handler(ctx, m.client, msg)
+		}()
+		return done
+	}
+	m.handler(ctx, m.client, msg)
+	close(done)
+	return done
 }
 
 func aggregateQueuedMessages(batch []queuedWeixinMessage) WeixinMessage {

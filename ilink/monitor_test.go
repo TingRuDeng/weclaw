@@ -204,6 +204,78 @@ func TestProcessUpdateResponseAdvancesCursorAfterDispatch(t *testing.T) {
 	}
 }
 
+func TestProcessUpdateResponseDoesNotWaitForAsyncHandler(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	monitor := &Monitor{
+		getUpdatesBuf: "before",
+		bufPath:       t.TempDir() + "/sync.json",
+		queues:        make(map[string]chan queuedWeixinMessage),
+		dispatchAsync: true,
+		handler: func(context.Context, *Client, WeixinMessage) {
+			close(entered)
+			<-release
+		},
+	}
+	done := make(chan bool, 1)
+	go func() {
+		done <- monitor.processUpdateResponse(ctx, &GetUpdatesResponse{
+			GetUpdatesBuf: "after",
+			Msgs:          []WeixinMessage{textMonitorMessage("u1", "long task")},
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("async handler did not start")
+	}
+	select {
+	case ok := <-done:
+		if !ok || monitor.getUpdatesBuf != "after" {
+			t.Fatalf("processed=%v cursor=%q, want async cursor advance", ok, monitor.getUpdatesBuf)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("processUpdateResponse waited for long handler")
+	}
+	close(release)
+}
+
+func TestAsyncMonitorKeepsPerUserQueueSerialized(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondHandled := make(chan struct{})
+	monitor := &Monitor{
+		queues:        make(map[string]chan queuedWeixinMessage),
+		dispatchAsync: true,
+		handler: func(_ context.Context, _ *Client, msg WeixinMessage) {
+			if msg.ItemList[0].TextItem.Text == "first" {
+				close(firstEntered)
+				<-releaseFirst
+				return
+			}
+			close(secondHandled)
+		},
+	}
+	monitor.enqueueMessage(ctx, textMonitorMessage("u1", "first"))
+	<-firstEntered
+	monitor.enqueueMessage(ctx, textMonitorMessage("u1", "second"))
+	select {
+	case <-secondHandled:
+		t.Fatal("same-user async messages must remain serialized")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseFirst)
+	select {
+	case <-secondHandled:
+	case <-time.After(time.Second):
+		t.Fatal("second async message was not dispatched after first completed")
+	}
+}
+
 func TestMonitorRemovesIdleUserQueue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

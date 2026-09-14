@@ -81,6 +81,17 @@ func normalizePlatformProgressConfig(platformName platform.PlatformName, cfg con
 	return cfg
 }
 
+func normalizeProgressConfigForCapabilities(cfg config.ProgressConfig, capabilities platform.Capabilities) config.ProgressConfig {
+	if cfg.Mode == progressModeStream && !capabilities.Streaming {
+		cfg.Mode = progressModeSummary
+		if cfg.MaxProgressMessages <= 0 {
+			cfg.MaxProgressMessages = config.DefaultProgressConfig().MaxProgressMessages
+		}
+		cfg.StreamTimelineLimit = nil
+	}
+	return cfg
+}
+
 // defaultAgentNameForRoute 优先使用当前消息会话显式选择的 Agent。
 func (h *Handler) defaultAgentNameForRoute(routeUserID string, platformName platform.PlatformName, accountID string) string {
 	if agentName, ok := h.ensureAgentSessions().Get(routeUserID); ok {

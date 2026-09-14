@@ -11,6 +11,13 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
+func TestIgnoreCardKitUpdateErrorDoesNotSwallowStaleSequence(t *testing.T) {
+	err := formatFeishuAPIError("app", 300317, "sequence is stale")
+	if got := ignoreCardKitUpdateError(err); got == nil {
+		t.Fatal("stale CardKit sequence error was swallowed")
+	}
+}
+
 type fakeCardKitClient struct {
 	cardID           string
 	cardIDs          []string
@@ -581,6 +588,36 @@ func TestFeishuStreamUpdateThrottlesAndIncrementsSequence(t *testing.T) {
 
 	if len(cardKit.streamSeqs) != 2 || cardKit.streamSeqs[0] != 2 || cardKit.streamSeqs[1] != 3 {
 		t.Fatalf("stream seqs=%#v, want [2 3]", cardKit.streamSeqs)
+	}
+}
+
+type presentationContextCardKitClient struct {
+	fakeCardKitClient
+	ctxErr chan error
+}
+
+func (c *presentationContextCardKitClient) UpdateCard(ctx context.Context, cardID string, cardJSON string, sequence int) error {
+	c.ctxErr <- ctx.Err()
+	return ctx.Err()
+}
+
+func TestFeishuPresentationFlushUsesOriginalContext(t *testing.T) {
+	kit := &presentationContextCardKitClient{ctxErr: make(chan error, 1)}
+	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	stream := &feishuStream{cardKit: kit, cardID: "card-1", throttle: time.Hour, now: func() time.Time { return now }, lastUpdate: now}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := stream.UpdatePresentation(ctx, platform.StreamPresentation{Summary: "queued", Details: "details"}); err != nil {
+		t.Fatalf("UpdatePresentation error: %v", err)
+	}
+	cancel()
+	stream.flushPresentation()
+	select {
+	case err := <-kit.ctxErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("flush context error=%v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("presentation flush did not call CardKit")
 	}
 }
 
