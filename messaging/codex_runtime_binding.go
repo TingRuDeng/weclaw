@@ -178,8 +178,46 @@ func codexRuntimeReadyForRemoteTurn(runtime agent.CodexRuntimeHolder) bool {
 
 func codexResolutionModelStatus(resolution codexRuntimeResolution, fallback sessionModelStatus) sessionModelStatus {
 	state := resolution.Binding.State
-	if strings.TrimSpace(state.Model) == "" && strings.TrimSpace(state.Effort) == "" {
-		return fallback
+	status := fallback
+	if strings.TrimSpace(state.Model) != "" {
+		status.Model = state.Model
 	}
-	return sessionModelStatus{Model: state.Model, Effort: state.Effort}
+	if strings.TrimSpace(state.Effort) != "" {
+		status.Effort = state.Effort
+	}
+	return status
+}
+
+// codexConfiguredSessionModelStatus 让 thread/settings 的当前配置覆盖 runtime
+// 和最近一次 turn，避免设置已生效但尚未开始新 turn 时仍展示旧模型。
+func codexConfiguredSessionModelStatus(
+	resolution codexRuntimeResolution,
+	fallback sessionModelStatus,
+	configured sessionModelStatus,
+) sessionModelStatus {
+	status := codexResolutionModelStatus(resolution, fallback)
+	if strings.TrimSpace(configured.Model) != "" {
+		status.Model = configured.Model
+	}
+	if strings.TrimSpace(configured.Effort) != "" {
+		status.Effort = configured.Effort
+	}
+	return status
+}
+
+func codexThreadConfiguredModelStatus(
+	ctx context.Context,
+	ag agent.Agent,
+	conversationID string,
+	threadID string,
+) sessionModelStatus {
+	configAgent, ok := ag.(agent.CodexThreadConfigAgent)
+	if !ok {
+		return sessionModelStatus{}
+	}
+	config, err := configAgent.CodexThreadConfig(ctx, conversationID, threadID)
+	if err != nil {
+		return sessionModelStatus{}
+	}
+	return sessionModelStatus{Model: config.Model, Effort: config.Effort}
 }

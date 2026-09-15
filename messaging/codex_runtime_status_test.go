@@ -41,6 +41,21 @@ func TestCodexStatusReturnsSharedHostState(t *testing.T) {
 	}
 }
 
+func TestCodexStatusShowsCurrentThreadModelAndEffort(t *testing.T) {
+	h, ag, runtime := codexRuntimeStatusFixture(t)
+	configured := &codexConfiguredLiveAgent{
+		fakeCodexLiveAgent: ag,
+		config:             agent.CodexThreadConfig{Model: "gpt-6-astra", Effort: "xhigh"},
+	}
+	runtime.agent = configured
+
+	result := h.renderCodexStatus(runtime)
+	if !strings.Contains(result.Reply, "模型: gpt-6-astra") ||
+		!strings.Contains(result.Reply, "推理强度: xhigh") {
+		t.Fatalf("reply=%q, want current thread model and effort", result.Reply)
+	}
+}
+
 func TestCodexStatusShowsExactTurnAndControlChannel(t *testing.T) {
 	h, ag, runtime := codexRuntimeStatusFixture(t)
 	ag.setBindingState(agent.CodexThreadState{

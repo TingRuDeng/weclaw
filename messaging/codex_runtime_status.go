@@ -29,15 +29,26 @@ func (h *Handler) renderCodexStatus(runtime codexSessionCommandRuntime) navigati
 	}
 	bindingLine := "绑定: 已绑定"
 	syncLine := h.codexProgressSyncStatusLine(runtime.bindingKey, threadID)
+	statusModelLines := func(resolution codexRuntimeResolution) []string {
+		configuredModelStatus := codexThreadConfiguredModelStatus(
+			runtime.ctx, runtime.agent, runtime.codexRoute(threadID).conversationID, threadID,
+		)
+		status := codexConfiguredSessionModelStatus(
+			resolution, h.codexSessionModelStatus(threadID), configuredModelStatus,
+		)
+		return renderSessionModelStatus(status)
+	}
 	if _, ok := runtime.agent.(agent.CodexLiveRuntimeAgent); !ok {
-		extra := append([]string{syncLine, speedLine}, codexStatusCompatibilityDetails(runtime, threadID)...)
+		extra := append(statusModelLines(codexRuntimeResolution{}), syncLine, speedLine)
+		extra = append(extra, codexStatusCompatibilityDetails(runtime, threadID)...)
 		extra = append(extra, codexStatusRouteDetails(h, runtime, threadID, "(none)", agent.CodexRuntimeUnknown, false)...)
 		return compactCodexStatusResult(base, bindingLine, "任务: 未确认", accountLine, "运行通道: 可用（兼容模式）", extra...)
 	}
 
 	unlock, err := h.lockCodexSessionThread(runtime.ctx, threadID, "status")
 	if err != nil {
-		extra := append([]string{syncLine, speedLine}, codexStatusUnavailableDetails(runtime, threadID)...)
+		extra := append(statusModelLines(codexRuntimeResolution{}), syncLine, speedLine)
+		extra = append(extra, codexStatusUnavailableDetails(runtime, threadID)...)
 		extra = append(extra, codexStatusRouteDetails(h, runtime, threadID, "(none)", agent.CodexRuntimeUnknown, false)...)
 		return compactCodexStatusResult(base, bindingLine, "任务: 未确认", accountLine, "运行通道: 不可用（查询繁忙）", extra...)
 	}
@@ -46,12 +57,14 @@ func (h *Handler) renderCodexStatus(runtime codexSessionCommandRuntime) navigati
 		route: runtime.codexRoute(threadID), threadID: threadID, ag: runtime.agent,
 	})
 	if err != nil {
-		extra := append([]string{syncLine, speedLine}, codexStatusUnavailableDetails(runtime, threadID)...)
+		extra := append(statusModelLines(resolution), syncLine, speedLine)
+		extra = append(extra, codexStatusUnavailableDetails(runtime, threadID)...)
 		extra = append(extra, codexStatusRouteDetails(h, runtime, threadID, "(none)", agent.CodexRuntimeUnknown, false)...)
 		return compactCodexStatusResult(base, bindingLine, "任务: 未确认", accountLine, "运行通道: 不可用", extra...)
 	}
 	taskLine, runtimeLine := compactCodexRuntimeStatusLines(resolution)
-	extra := append([]string{syncLine, speedLine}, codexRuntimeStatusDetails(h, runtime, threadID, resolution)...)
+	extra := append(statusModelLines(resolution), syncLine, speedLine)
+	extra = append(extra, codexRuntimeStatusDetails(h, runtime, threadID, resolution)...)
 	return compactCodexStatusResult(base, bindingLine, taskLine, accountLine, runtimeLine, extra...)
 }
 

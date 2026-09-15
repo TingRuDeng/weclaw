@@ -44,6 +44,25 @@ type failingCodexSubscriptionAgent struct {
 	calls int
 }
 
+type codexConfiguredLiveAgent struct {
+	*fakeCodexLiveAgent
+	config agent.CodexThreadConfig
+}
+
+func (a *codexConfiguredLiveAgent) CodexThreadConfig(context.Context, string, string) (agent.CodexThreadConfig, error) {
+	return a.config, nil
+}
+
+func (a *codexConfiguredLiveAgent) SetCodexThreadConfig(_ context.Context, update agent.CodexThreadConfigUpdate) error {
+	if update.Model != "" {
+		a.config.Model = update.Model
+	}
+	if update.Effort != "" {
+		a.config.Effort = update.Effort
+	}
+	return nil
+}
+
 func (a *failingCodexSubscriptionAgent) SubscribeCodexThread(
 	context.Context,
 	string,
@@ -154,6 +173,33 @@ func TestAcquireCodexSessionCommitsFrontendBindingAndSharedRuntime(t *testing.T)
 	}
 	if result.resolution.Binding.Runtime != agent.CodexRuntimeWeClaw {
 		t.Fatalf("runtime=%q", result.resolution.Binding.Runtime)
+	}
+}
+
+func TestAcquireCodexSessionShowsCurrentThreadConfigBeforeNextTurn(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.workspaceB = t.TempDir()
+	f.h.ensureCodexSessions().setThread(f.bindingKey, f.workspaceB, "thread-b")
+	codexDir := t.TempDir()
+	writeLocalCodexSession(t, codexDir, "thread-b", f.workspaceB, "旧任务", "2026-09-15T08:00:00Z")
+	appendLocalCodexTurnContext(t, codexDir, "thread-b", "gpt-5.5", "xhigh")
+	f.h.SetCodexLocalSessionDir(codexDir)
+	configured := &codexConfiguredLiveAgent{
+		fakeCodexLiveAgent: f.ag,
+		config:             agent.CodexThreadConfig{Model: "gpt-6-astra", Effort: "high"},
+	}
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(func() codexSessionAcquireRequest {
+		req := f.request("thread-b")
+		req.agent = configured
+		return req
+	}())
+	if err != nil {
+		t.Fatalf("acquire error=%v", err)
+	}
+	text := f.h.renderCodexSessionAcquireSuccess(result)
+	if !strings.Contains(text, "模型: gpt-6-astra · 推理强度: high") || strings.Contains(text, "模型: gpt-5.5") {
+		t.Fatalf("text=%q, want current thread config instead of previous turn config", text)
 	}
 }
 

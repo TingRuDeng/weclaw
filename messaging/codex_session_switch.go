@@ -143,8 +143,9 @@ func (h *Handler) renderCodexSessionAcquireSuccess(result codexSessionAcquireRes
 // renderCodexSessionAcquireResult 展示 frontend binding、共享 host 和观察状态。
 func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResult, headline string, workspaceName string) string {
 	lines := []string{headline, "工作空间: " + workspaceName}
-	modelStatus := codexResolutionModelStatus(
+	modelStatus := codexConfiguredSessionModelStatus(
 		result.resolution, h.codexSessionModelStatus(result.route.threadID),
+		result.configuredModelStatus,
 	)
 	lines = append(lines, renderCompactSessionModelStatus(modelStatus))
 	if result.handoffReleaseAttempted {

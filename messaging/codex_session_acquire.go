@@ -41,6 +41,7 @@ type codexSessionAcquireRequest struct {
 type codexSessionAcquireResult struct {
 	route                        codexConversationRoute
 	resolution                   codexRuntimeResolution
+	configuredModelStatus        sessionModelStatus
 	externalState                externalCodexTaskState
 	externalActive               bool
 	externalProgressCard         bool
@@ -153,6 +154,9 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		return codexSessionAcquireResult{}, result.agentSessionErr
 	}
 	if providerPreparation.Deferred && !providerPreparation.TargetActive && !providerRequest.Checkpoint.Active {
+		result.configuredModelStatus = codexThreadConfiguredModelStatus(
+			req.ctx, req.agent, req.route.conversationID, req.route.threadID,
+		)
 		result.resolution = codexRuntimeResolution{
 			Request: providerRequest, Binding: unknownCodexRuntimeBinding(providerRequest),
 			Rollout: providerRollout, Live: true, ProbeErr: agent.ErrCodexWriterBusy,
@@ -168,6 +172,9 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 			req, result.runtimeErr,
 		)
 	}
+	result.configuredModelStatus = codexThreadConfiguredModelStatus(
+		req.ctx, req.agent, req.route.conversationID, req.route.threadID,
+	)
 	result = h.unsubscribePreviousCodexThread(result, req, locked)
 	storeSelectionChanged := !codexRemoteSelectionMatchesRoute(locked, req.route)
 	result.selectionChanged = h.codexTaskCardSelectionChanged(
