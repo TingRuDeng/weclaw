@@ -255,6 +255,7 @@ func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, conte
 	if state == nil {
 		return cardOptions{}, false
 	}
+	fullProgress := !hasProgressPreview(state.preview, state.content)
 	if strings.TrimSpace(status) != "" {
 		normalized := normalizeCardStatus(status)
 		state.status = normalized
@@ -265,6 +266,7 @@ func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, conte
 			normalized == cardStatusSuperseded || normalized == cardStatusDetached
 		if terminalDisplay {
 			state.preview = trimTaskStreamThinkingIndicator(state.preview)
+			state.content = trimTaskStreamThinkingIndicator(state.content)
 			state.expanded = false
 		}
 		if replaceContent && (normalized == cardStatusDone || normalized == cardStatusError || normalized == cardStatusStopped) {
@@ -283,6 +285,9 @@ func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, conte
 		}
 	} else if strings.TrimSpace(content) != "" {
 		state.content = content
+	}
+	if fullProgress {
+		state.preview = state.content
 	}
 	state.updatedAt = r.nowOrDefault()
 	return state.cardOptions(), true

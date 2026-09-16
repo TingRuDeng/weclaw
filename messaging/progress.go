@@ -25,9 +25,8 @@ const (
 	progressModeStream  = "stream"
 	progressModeDebug   = "debug"
 
-	progressDefaultCompletion    = "任务已完成，正在发送最终结果。"
-	progressStatusOnlyComplete   = "\x00weclaw_status_only_complete"
-	progressTimelinePreviewItems = 5
+	progressDefaultCompletion  = "任务已完成，正在发送最终结果。"
+	progressStatusOnlyComplete = "\x00weclaw_status_only_complete"
 )
 
 var progressStageHints = []struct {
@@ -877,17 +876,7 @@ func (s *progressSession) snapshotPresentationLocked(snapshot progressCardSnapsh
 		summary = snapshot.text
 	}
 	details := s.activeSnapshotContentLocked(snapshot)
-	preview := details
-	if snapshot.structured && len(snapshot.timelineItems) > 0 {
-		items := s.segmentedSnapshotTimelineItemsLocked(snapshot)
-		if len(items) > progressTimelinePreviewItems {
-			items = items[len(items)-progressTimelinePreviewItems:]
-		}
-		if content, timeline := renderTaskProgressTimeline(items, snapshot.text); timeline {
-			preview = appendActiveThinkingIndicator(appendTaskCurrentExplanation(content, snapshot.currentExplanation))
-		}
-	}
-	return platform.StreamPresentation{Summary: summary, Preview: preview, Details: details}
+	return platform.StreamPresentation{Summary: summary, Preview: details, Details: details}
 }
 
 func (s *progressSession) activeSnapshotContentLocked(snapshot progressCardSnapshot) string {

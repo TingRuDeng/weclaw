@@ -13,7 +13,7 @@ func TestBuildTaskCardUsesExplicitProgressVisibilityControls(t *testing.T) {
 	}{{cardStatusThinking, true}, {cardStatusStreaming, true}, {cardStatusSuperseded, false}, {cardStatusDone, false}, {cardStatusStopped, false}, {cardStatusError, false}}
 	for _, tt := range statuses {
 		raw, err := buildCardV2(cardOptions{
-			Status: tt.status, Title: "Codex", Summary: "摘要", Content: "详情",
+			Status: tt.status, Title: "Codex", Summary: "摘要", Preview: "预览", Content: "详情",
 			Collapsible: true, Expanded: tt.expanded, taskCardID: "card-task-1",
 		})
 		if err != nil {
@@ -57,7 +57,7 @@ func TestBuildTaskCardUsesExplicitProgressVisibilityControls(t *testing.T) {
 func TestExpandedTaskCardPlacesCollapseControlAfterProgressAndApprovals(t *testing.T) {
 	registry := newTaskCardRegistry()
 	registry.record("card-task-1", cardOptions{
-		Status: cardStatusStreaming, Title: "Codex", Summary: "摘要", Content: "完整时间线",
+		Status: cardStatusStreaming, Title: "Codex", Summary: "摘要", Preview: "预览", Content: "完整时间线",
 		Approvals: []string{"允许本次：读取文件"}, Collapsible: true, Expanded: true,
 		InlineActiveStatus: true,
 	})

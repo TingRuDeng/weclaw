@@ -53,11 +53,11 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 	}
 }
 
-func TestApprovalRebuildPreservesCollapsibleTaskProgress(t *testing.T) {
+func TestApprovalRebuildPreservesFullTaskProgress(t *testing.T) {
 	kit := &fakeCardKitClient{}
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.cardKit = kit
-	adapter.taskCards.record("card-task-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Summary: "正在运行测试", Content: "读取代码\n\n运行测试", Collapsible: true, Expanded: true})
+	adapter.taskCards.record("card-task-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Summary: "正在运行测试", Preview: "读取代码\n\n运行测试", Content: "读取代码\n\n运行测试", Collapsible: true})
 	dispatched := make(chan platform.IncomingMessage, 1)
 	if _, err := adapter.handleCardActionEvent(context.Background(), approvalCardActionEvent("allow", "允许本次", "card-task-1"), func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
@@ -70,22 +70,22 @@ func TestApprovalRebuildPreservesCollapsibleTaskProgress(t *testing.T) {
 	}
 	card := decodeCardJSON(t, kit.updateCards[0])
 	elems := card["body"].(map[string]any)["elements"].([]any)
-	progressFound, approvalFound, collapseFound := false, false, false
+	progressFound, approvalFound, controlFound := false, false, false
 	for _, element := range elems {
 		item := element.(map[string]any)
 		if item["element_id"] == cardMainContentID {
-			progressFound = strings.Contains(item["content"].(string), "运行测试")
+			progressFound = item["content"] == "读取代码\n\n运行测试"
 		}
-		if item["element_id"] == cardProgressCollapseID {
-			collapseFound = true
+		if item["element_id"] == cardProgressCollapseID || item["element_id"] == cardProgressExpandID {
+			controlFound = true
 		}
 		value := item["content"]
 		if content, ok := value.(string); ok && strings.Contains(content, "允许本次") {
 			approvalFound = true
 		}
 	}
-	if !progressFound || !approvalFound || !collapseFound {
-		t.Fatalf("elements=%#v, want progress, approval and collapse control", elems)
+	if !progressFound || !approvalFound || controlFound {
+		t.Fatalf("elements=%#v, want complete progress and approval without visibility controls", elems)
 	}
 }
 

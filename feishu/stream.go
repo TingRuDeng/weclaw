@@ -157,7 +157,7 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 			return nil
 		}
 		op := feishuStreamUpdateOp{content: presentationVisibleContent(p, false)}
-		if !s.collapsible {
+		if !s.collapsible || hasProgressPreview(s.lastPreview, s.lastContent) != hasProgressPreview(p.Preview, p.Details) {
 			opts := cardOptions{
 				Status: cardStatusThinking, Title: s.title, Summary: p.Summary, Preview: p.Preview, Content: p.Details,
 				Collapsible: true, Expanded: false, InlineActiveStatus: s.inlineActiveStatus,
@@ -179,6 +179,8 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 				return err
 			}
 			op.taskCardJSON = cardJSON
+			// 完整展示与旧预览互换时需要更新按钮；远端失败后仍须重试布局。
+			s.collapsible = false
 		} else if s.taskCards != nil {
 			snapshot, sequence, ok := s.taskCards.updatePresentationWithSequence(s.cardID, p.Summary, p.Preview, p.Details)
 			if ok {
@@ -951,6 +953,9 @@ func (s *feishuStream) prepareTerminalUpdate(status string, content string) (fei
 			opts.Content = trimTaskStreamThinkingIndicator(s.lastContent)
 		}
 		opts.Approvals = append([]string(nil), s.preservedApprovals...)
+	}
+	if !hasProgressPreview(s.lastPreview, s.lastContent) {
+		opts.Preview = opts.Content
 	}
 	if s.taskCards != nil {
 		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, status, opts.Content, s.preserveTerminalContent); ok {

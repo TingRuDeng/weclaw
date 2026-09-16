@@ -188,10 +188,9 @@ func TestTaskCardFirstStructuredPresentationUpgradesInitialCard(t *testing.T) {
 	}
 	card := decodeCardJSON(t, kit.updateCards[0])
 	elements := card["body"].(map[string]any)["elements"].([]any)
-	if len(elements) != 2 || elements[0].(map[string]any)["element_id"] != cardMainContentID ||
-		elements[0].(map[string]any)["content"] != "读取代码\n\n"+platform.TaskStreamThinkingIndicator ||
-		elements[1].(map[string]any)["element_id"] != cardProgressExpandID {
-		t.Fatalf("upgraded body=%#v, want default preview and bottom expand control", card["body"])
+	if len(elements) != 1 || elements[0].(map[string]any)["element_id"] != cardMainContentID ||
+		elements[0].(map[string]any)["content"] != "读取代码\n\n"+platform.TaskStreamThinkingIndicator {
+		t.Fatalf("upgraded body=%#v, want full progress without expand control", card["body"])
 	}
 
 	err = stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{
@@ -214,7 +213,7 @@ func TestTaskCardFirstStructuredPresentationUpgradesInitialCard(t *testing.T) {
 	}
 }
 
-func TestTaskCardInitialStructuredPresentationAddsBottomCollapseControl(t *testing.T) {
+func TestTaskCardInitialStructuredPresentationShowsDetailsWithoutCollapseControl(t *testing.T) {
 	kit := &fakeCardKitClient{cardID: "card-initial-progress"}
 	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
 	_, err := reply.OpenStream(context.Background(), platform.StreamOptions{
@@ -231,14 +230,9 @@ func TestTaskCardInitialStructuredPresentationAddsBottomCollapseControl(t *testi
 	}
 	card := decodeCardJSON(t, kit.updateCards[0])
 	elements := card["body"].(map[string]any)["elements"].([]any)
-	button := elements[len(elements)-1].(map[string]any)
-	if button["element_id"] != cardProgressExpandID {
-		t.Fatalf("elements=%#v, want bottom expand control", elements)
-	}
-	behaviors := button["behaviors"].([]any)
-	value := behaviors[0].(map[string]any)["value"].(map[string]any)
-	if value["task_card_id"] != "card-initial-progress" {
-		t.Fatalf("button value=%#v, want created task card id", value)
+	if len(elements) != 1 || elements[0].(map[string]any)["element_id"] != cardMainContentID ||
+		elements[0].(map[string]any)["content"] != "读取代码\n\n"+platform.TaskStreamThinkingIndicator {
+		t.Fatalf("elements=%#v, want full progress without collapse control", elements)
 	}
 }
 
@@ -246,7 +240,7 @@ func TestCollapsibleTaskTerminalAndSupersedeShowPreviewBeforeExpandControl(t *te
 	for _, terminal := range []platform.StreamTerminalState{platform.StreamTerminalCompleted, platform.StreamTerminalFailed, platform.StreamTerminalStopped} {
 		kit := &fakeCardKitClient{cardID: "card-terminal"}
 		reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
-		stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "初始", InitialPresentation: &platform.StreamPresentation{Summary: "摘要", Details: "详情"}})
+		stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "初始", InitialPresentation: &platform.StreamPresentation{Summary: "摘要", Preview: "预览", Details: "详情"}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -273,7 +267,7 @@ func TestCollapsibleTaskTerminalAndSupersedeShowPreviewBeforeExpandControl(t *te
 	}
 	kit := &fakeCardKitClient{cardID: "card-super"}
 	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
-	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "初始", InitialPresentation: &platform.StreamPresentation{Summary: "摘要", Details: "详情"}})
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "初始", InitialPresentation: &platform.StreamPresentation{Summary: "摘要", Preview: "预览", Details: "详情"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1187,7 +1181,7 @@ func TestFeishuTerminalCheckpointKeepsOperationIDsAcrossRestartRetry(t *testing.
 func TestFeishuPrepareSupersedeFromReferencePreservesHiddenProgressAndExpandControl(t *testing.T) {
 	payload, err := json.Marshal(feishuStreamReferencePayload{
 		CardID: "card-1", Title: "Codex · project-a", Sequence: 7,
-		Content: "旧兼容进度", Summary: "已完成代码检查", Details: "1. 已读取实现\n2. 已补充测试",
+		Content: "旧兼容进度", Summary: "已完成代码检查", Preview: "2. 已补充测试", Details: "1. 已读取实现\n2. 已补充测试",
 		Collapsible: true, Approvals: []string{"允许本次：命令：date"},
 	})
 	if err != nil {

@@ -534,7 +534,7 @@ func TestProgressReanchorSnapshotCarriesStructuredSummaryAndDetails(t *testing.T
 	}
 }
 
-func TestProgressPresentationPreviewsLatestFiveStructuredItems(t *testing.T) {
+func TestProgressPresentationShowsAllStructuredItems(t *testing.T) {
 	session := &progressSession{}
 	events := []agent.ProgressEvent{
 		{ID: "step-1", Kind: agent.ProgressKindCommentary, Sequence: 1, Text: "第一条进度"},
@@ -553,22 +553,19 @@ func TestProgressPresentationPreviewsLatestFiveStructuredItems(t *testing.T) {
 
 	presentation := session.snapshotPresentationLocked(snapshot)
 
-	for _, want := range []string{"第一条进度", "第二条进度", "第七条进度"} {
-		if !strings.Contains(presentation.Details, want) {
-			t.Fatalf("details=%q, want %q", presentation.Details, want)
-		}
+	if presentation.Preview != presentation.Details {
+		t.Fatalf("preview=%q, want full details=%q", presentation.Preview, presentation.Details)
 	}
-	for _, hidden := range []string{"第一条进度", "第二条进度"} {
-		if strings.Contains(presentation.Preview, hidden) {
-			t.Fatalf("preview=%q, must omit %q", presentation.Preview, hidden)
+	previous := -1
+	for _, event := range events {
+		index := strings.Index(presentation.Preview, event.Text)
+		if index <= previous {
+			t.Fatalf("preview=%q, want all messages in order, missing or misplaced %q", presentation.Preview, event.Text)
 		}
+		previous = index
 	}
-	for _, want := range []string{"第三条进度", "第四条进度", "第五条进度", "第六条进度", "第七条进度"} {
-		if !strings.Contains(presentation.Preview, want) {
-			t.Fatalf("preview=%q, want %q", presentation.Preview, want)
-		}
-	}
-	if !strings.HasSuffix(presentation.Preview, platform.TaskStreamThinkingIndicator) {
+	if strings.Count(presentation.Preview, platform.TaskStreamThinkingIndicator) != 1 ||
+		!strings.HasSuffix(presentation.Preview, platform.TaskStreamThinkingIndicator) {
 		t.Fatalf("preview=%q, want active indicator at bottom", presentation.Preview)
 	}
 }
@@ -607,11 +604,12 @@ func TestProgressSessionOpensWithSeededStructuredPresentation(t *testing.T) {
 	if presentation == nil {
 		t.Fatal("initial presentation=nil, want seeded active-turn progress on first card")
 	}
-	if strings.Contains(presentation.Preview, "第一条说明") || !strings.Contains(presentation.Preview, "第二条说明") ||
-		!strings.Contains(presentation.Preview, "第六条说明") {
-		t.Fatalf("preview=%q, want latest five entries", presentation.Preview)
+	if presentation.Preview != presentation.Details {
+		t.Fatalf("preview=%q, want full details=%q", presentation.Preview, presentation.Details)
 	}
-	if !strings.Contains(presentation.Details, "第一条说明") || !strings.Contains(presentation.Details, "第六条说明") {
-		t.Fatalf("details=%q, want complete progress", presentation.Details)
+	for _, event := range events {
+		if !strings.Contains(presentation.Preview, event.Text) {
+			t.Fatalf("preview=%q, want seeded message %q", presentation.Preview, event.Text)
+		}
 	}
 }

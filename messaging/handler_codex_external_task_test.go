@@ -25,7 +25,7 @@ func (a *fakeCodexProgressSnapshotAgent) ReadCodexThreadProgressSnapshot(
 	return state, append([]agent.ProgressEvent(nil), a.progress...), err
 }
 
-func TestCodexSwitchActiveTurnOpensCardWithLatestFiveSnapshotEntries(t *testing.T) {
+func TestCodexSwitchActiveTurnOpensCardWithCompleteSnapshot(t *testing.T) {
 	h := NewHandler(nil, nil)
 	watchDone := make(chan struct{})
 	base := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{
@@ -76,12 +76,13 @@ func TestCodexSwitchActiveTurnOpensCardWithLatestFiveSnapshotEntries(t *testing.
 	if presentation == nil {
 		t.Fatal("initial presentation=nil, want active-turn snapshot")
 	}
-	if strings.Contains(presentation.Preview, "第1条说明") || !strings.Contains(presentation.Preview, "第2条说明") ||
-		!strings.Contains(presentation.Preview, "第6条说明") {
-		t.Fatalf("preview=%q, want latest five snapshot entries", presentation.Preview)
+	if presentation.Preview != presentation.Details {
+		t.Fatalf("preview=%q, want full details=%q", presentation.Preview, presentation.Details)
 	}
-	if !strings.Contains(presentation.Details, "第1条说明") || !strings.Contains(presentation.Details, "第6条说明") {
-		t.Fatalf("details=%q, want complete snapshot", presentation.Details)
+	for _, event := range ag.progress {
+		if !strings.Contains(presentation.Preview, event.Text) {
+			t.Fatalf("preview=%q, want snapshot message %q", presentation.Preview, event.Text)
+		}
 	}
 }
 

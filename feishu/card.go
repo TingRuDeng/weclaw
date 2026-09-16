@@ -91,14 +91,16 @@ func buildCardV2(opts cardOptions) (string, error) {
 		if main != nil {
 			elements = append(elements, main)
 		}
-		if taskCardID != "" && opts.Expanded {
-			elements = append(elements, taskProgressControlButton(
-				cardProgressCollapseID, "收起完整进度", cardActionTaskProgressCollapse, taskCardID,
-			))
-		} else if taskCardID != "" {
-			elements = append(elements, taskProgressControlButton(
-				cardProgressExpandID, "展开完整进度", cardActionTaskProgressExpand, taskCardID,
-			))
+		if taskCardID != "" && hasProgressPreview(opts.Preview, opts.Content) {
+			if opts.Expanded {
+				elements = append(elements, taskProgressControlButton(
+					cardProgressCollapseID, "收起完整进度", cardActionTaskProgressCollapse, taskCardID,
+				))
+			} else {
+				elements = append(elements, taskProgressControlButton(
+					cardProgressExpandID, "展开完整进度", cardActionTaskProgressExpand, taskCardID,
+				))
+			}
 		}
 	} else {
 		if main != nil {
@@ -138,6 +140,11 @@ func buildCardV2(opts cardOptions) (string, error) {
 		return "", fmt.Errorf("marshal feishu card: %w", err)
 	}
 	return string(data), nil
+}
+
+func hasProgressPreview(preview, content string) bool {
+	preview = strings.TrimSpace(preview)
+	return preview != "" && preview != strings.TrimSpace(content)
 }
 
 func isCompactTerminalStatus(status string) bool {

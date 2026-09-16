@@ -545,19 +545,12 @@ func TestProgressSessionUsesStructuredPresentation(t *testing.T) {
 	if presentation == nil || presentation.Summary != "最新摘要" {
 		t.Fatalf("initial presentation=%#v", newReply.lastOptions.InitialPresentation)
 	}
-	for _, want := range []string{"第一条进度", "第二条进度", "第七条进度"} {
-		if !strings.Contains(presentation.Details, want) {
-			t.Fatalf("initial details=%q, want %q", presentation.Details, want)
-		}
+	if presentation.Preview != presentation.Details {
+		t.Fatalf("initial preview=%q, want full details=%q", presentation.Preview, presentation.Details)
 	}
-	for _, hidden := range []string{"第一条进度", "第二条进度"} {
-		if strings.Contains(presentation.Preview, hidden) {
-			t.Fatalf("initial preview=%q, must omit %q", presentation.Preview, hidden)
-		}
-	}
-	for _, want := range []string{"第三条进度", "第四条进度", "第五条进度", "第六条进度", "第七条进度"} {
-		if !strings.Contains(presentation.Preview, want) {
-			t.Fatalf("initial preview=%q, want %q", presentation.Preview, want)
+	for _, event := range timelineItems {
+		if !strings.Contains(presentation.Preview, event.Text) {
+			t.Fatalf("initial preview=%q, want %q", presentation.Preview, event.Text)
 		}
 	}
 }
