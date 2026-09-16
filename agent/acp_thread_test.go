@@ -757,7 +757,7 @@ func TestCreateThreadDoesNotOverwriteNewerBinding(t *testing.T) {
 	assertCodexConversationThread(t, a, "conversation-1", "thread-new")
 }
 
-func TestAcceptedCodexTurnMarksCurrentConnectionSubscribed(t *testing.T) {
+func TestAcceptedCodexTurnDoesNotInventSubscription(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
 	a.mu.Lock()
 	a.threads["conversation-1"] = "thread-1"
@@ -778,8 +778,8 @@ func TestAcceptedCodexTurnMarksCurrentConnectionSubscribed(t *testing.T) {
 	if err := a.callCodexAppServerTurnStart(runtime); err != nil {
 		t.Fatal(err)
 	}
-	if a.codexThreadSubscriptionPending("conversation-1", "thread-1") {
-		t.Fatal("accepted turn left the current app-server subscription untracked")
+	if !a.codexThreadSubscriptionPending("conversation-1", "thread-1") {
+		t.Fatal("turn/start success must not invent a subscription on this connection")
 	}
 }
 

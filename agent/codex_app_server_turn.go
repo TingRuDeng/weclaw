@@ -100,6 +100,17 @@ func (a *ACPAgent) chatCodexAppServerControlledTurn(opts codexAppServerTurnOptio
 
 func (a *ACPAgent) startCodexAppServerTurn(runtime *codexAppServerTurnRuntime) {
 	go func() {
+		// turn/start 不会恢复已取消的订阅。先注册收集器，再恢复订阅，才能接住
+		// resume/start 响应前到达的进度和审批；与 unsubscribe 串行到输入提交结束。
+		// 当前 turn 已持有 gate permit，不能反向获取可能正在等待排空的 admission 锁。
+		a.codexSubscriptionMu.Lock()
+		defer a.codexSubscriptionMu.Unlock()
+		if a.codexThreadSubscriptionPending(runtime.opts.conversationID, runtime.threadID) {
+			if err := a.resumeThread(runtime.opts.ctx, runtime.opts.conversationID, runtime.threadID); err != nil {
+				log.Printf("[acp] turn subscription degraded (thread=%s): %v", runtime.threadID, err)
+				dispatchCodexTurnEvent(runtime.turnCh, &codexTurnEvent{Progress: codexSubscriptionDegradedProgress()})
+			}
+		}
 		err := a.callCodexAppServerTurnStart(runtime)
 		if err != nil && isMissingThreadError(err) {
 			log.Printf("[acp] turn/start failed with missing thread, attempting thread/resume (thread=%s): %v", runtime.threadID, err)
@@ -123,11 +134,6 @@ func (a *ACPAgent) callCodexAppServerTurnStart(runtime *codexAppServerTurnRuntim
 		Cwd:               a.cwdForConversation(runtime.opts.conversationID),
 	})
 	if turnID := codexTurnIDFromStartResult(result); turnID != "" {
-		// turn/start implicitly subscribes this live app-server connection. The
-		// conversation/thread mapping was persisted before the turn began, so only
-		// update the connection-local subscription index here. In particular, an
-		// observer may detach while this RPC is still returning.
-		a.trackCodexThreadSubscription(runtime.threadID)
 		if runtime.opts.onStarted != nil {
 			if acceptErr := runtime.opts.onStarted(turnID); acceptErr != nil {
 				return a.rejectStartedCodexTurn(runtime.threadID, turnID, acceptErr)

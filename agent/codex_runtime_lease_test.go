@@ -915,10 +915,22 @@ func TestRunCodexTurnSteersNotLoadedThreadWithActiveTurn(t *testing.T) {
 	if !reflect.DeepEqual(steerExpected, []string{"turn-active"}) {
 		t.Fatalf("steer expectedTurnId=%v, want one authoritative active turn", steerExpected)
 	}
+	steered, subscriptions := false, 0
 	for _, method := range methods {
-		if method == "thread/resume" || method == "turn/start" {
-			t.Fatalf("methods=%v, notLoaded active turn must steer without resume/start", methods)
+		switch method {
+		case "turn/steer":
+			steered = true
+		case "thread/resume":
+			subscriptions++
+			if !steered {
+				t.Fatalf("methods=%v, observer subscription must not gate active input", methods)
+			}
+		case "turn/start":
+			t.Fatalf("methods=%v, active input must not start another turn", methods)
 		}
+	}
+	if subscriptions != 1 {
+		t.Fatalf("methods=%v, want one observer subscription attempt after steer", methods)
 	}
 }
 

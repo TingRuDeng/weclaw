@@ -18,8 +18,12 @@ func (a *ACPAgent) SubscribeCodexThread(ctx context.Context, conversationID stri
 	// Keep topology changes and observer setup in the same admission order as
 	// write preflight: admission first, then the per-connection subscription
 	// lock. This prevents a handoff from racing a resume/fallback decision.
-	a.codexAdmissionMu.Lock()
-	defer a.codexAdmissionMu.Unlock()
+	// 已受理 turn 的 permit 会阻止 Host 切换；其 observer 不能反向等待
+	// 正持 admission 排空该 turn 的维护操作。独立订阅仍遵守原 admission 顺序。
+	if ctx.Value(codexAdmittedTurnContextKey{}) != a {
+		a.codexAdmissionMu.Lock()
+		defer a.codexAdmissionMu.Unlock()
+	}
 	a.codexSubscriptionMu.Lock()
 	defer a.codexSubscriptionMu.Unlock()
 	binding, bindingOK := a.runtimeBindingForThread(conversationID, threadID)
@@ -164,4 +168,12 @@ func (a *ACPAgent) codexThreadSubscriptionPending(conversationID string, threadI
 	subscribedEpoch, subscribed := a.codexThreadSubscriptions[threadID]
 	return strings.TrimSpace(a.threads[conversationID]) == threadID &&
 		(!subscribed || subscribedEpoch != a.wireEpoch)
+}
+
+func codexSubscriptionDegradedProgress() *ProgressEvent {
+	return &ProgressEvent{
+		ID: "codex-observer-subscription", Kind: ProgressKindStatus, State: ProgressStateFailed,
+		Summary: "进度同步已降级",
+		Detail:  "暂时无法同步实时进度和授权请求，请在 Codex App 查看任务并处理授权；任务结果会继续补查。",
+	}
 }

@@ -64,6 +64,8 @@ func (a *ACPAgent) SteerCodexInput(ctx context.Context, req CodexTurnRequest) (s
 	return a.submitCodexSteer(ctx, req, state, codexTurnStateRaceRetries)
 }
 
+type codexAdmittedTurnContextKey struct{}
+
 func (a *ACPAgent) runCodexTurn(ctx context.Context, req CodexTurnRequest, raceRetries int) (string, error) {
 	a.codexAdmissionMu.Lock()
 	admissionLocked := true
@@ -90,6 +92,7 @@ func (a *ACPAgent) runCodexTurn(ctx context.Context, req CodexTurnRequest, raceR
 			return "", err
 		}
 		defer permit.release()
+		ctx = context.WithValue(ctx, codexAdmittedTurnContextKey{}, a)
 	}
 	binding, err = a.prepareCodexRuntimeForWrite(ctx, req.Runtime, binding)
 	if err != nil {

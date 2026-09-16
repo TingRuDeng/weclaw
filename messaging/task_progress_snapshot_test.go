@@ -44,6 +44,41 @@ func TestActiveTaskProgressSnapshotRejectsStaleAndLateEvents(t *testing.T) {
 	}
 }
 
+func TestNativeTaskCardShowsSynchronizationFailureBeforeAgentProgress(t *testing.T) {
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.InitialDelaySeconds = 0
+	session := &progressSession{
+		ctx: context.Background(), reply: reply, cfg: cfg,
+		deltaCh: make(chan string, 1), snapshotCh: make(chan progressCardSnapshot, 1),
+	}
+	session.ensureStream()
+	if reply.Stream.Options.InitialContent != "思考中....." {
+		t.Fatalf("initial content=%q", reply.Stream.Options.InitialContent)
+	}
+	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{owner: "user-1", agentName: "codex"})
+	update, ok := task.recordProgressUpdate(time.Now(), agent.ProgressEvent{
+		ID: "codex-observer-subscription", Kind: agent.ProgressKindStatus, State: agent.ProgressStateFailed,
+		Summary: "进度同步已降级", Detail: "请在 Codex App 查看任务并处理授权；任务结果会继续补查。",
+	})
+	if !ok {
+		t.Fatal("synchronization warning was not recorded")
+	}
+	session.onTaskProgress(update)
+	select {
+	case snapshot := <-session.snapshotCh:
+		if !strings.Contains(snapshot.text, "进度同步已降级") || !strings.Contains(snapshot.text, "处理授权") {
+			t.Fatalf("card update=%q", snapshot.text)
+		}
+	default:
+		t.Fatal("card kept thinking instead of sending the synchronization warning")
+	}
+	if reply.Stream.Completed != "" || reply.Stream.Failed != "" {
+		t.Fatal("synchronization failure must not end the running task card")
+	}
+}
+
 func TestTaskViewReducerTerminalDominatesLateProgress(t *testing.T) {
 	now := time.Now()
 	state, changed := reduceTaskView(taskViewState{}, taskViewEvent{

@@ -32,6 +32,11 @@ func taskProgressUpdateHasEffectiveProgress(update taskProgressUpdate) bool {
 		switch event.Kind {
 		case agent.ProgressKindCommentary, agent.ProgressKindPlan, agent.ProgressKindFile, agent.ProgressKindTool:
 			return true
+		case agent.ProgressKindStatus:
+			// 同步失败需要用户介入，不能等到正常进度到来后才离开“思考中”。
+			if event.State == agent.ProgressStateFailed {
+				return true
+			}
 		}
 	}
 	return false

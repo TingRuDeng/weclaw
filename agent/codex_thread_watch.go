@@ -91,25 +91,21 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 			return "", ErrCodexRuntimeConflict
 		}
 	}
-	// A notLoaded thread may still have an active turn owned by another
-	// frontend. Calling thread/resume to establish this connection's observer
-	// would contend for that writer; authoritative polling below is sufficient
-	// until the turn reaches a terminal state.
-	knownActiveTurn := hasBinding && binding.State.Active &&
-		strings.TrimSpace(binding.State.ActiveTurnID) != ""
-	if (!hasBinding || binding.Runtime != CodexRuntimeDesktop) && !knownActiveTurn &&
-		a.codexThreadSubscriptionPending(opts.conversationID, opts.threadID) {
-		if _, err := a.SubscribeCodexThread(ctx, opts.conversationID, opts.threadID); err != nil {
-			// Subscription only improves real-time delivery. The authoritative
-			// snapshot and periodic reconciliation below remain sufficient to
-			// recover progress and terminal state without rejecting an input that
-			// the Host has already accepted.
-			log.Printf("[codex-watch] observer subscription degraded; continuing with authoritative polling thread=%q: %v", opts.threadID, err)
-		}
-	}
+	// 同一 Host 上的活动 turn 也需要当前连接的订阅。先登记 observer，避免
+	// thread/resume 立即重放的进度和审批在快照建立前无人接收。
 	turnCh := make(chan *codexTurnEvent, codexTurnEventBufferSize)
 	observerID := a.registerTurnObserver(opts.threadID, turnCh)
 	defer a.unregisterTurnObserver(opts.threadID, observerID, turnCh)
+	if (!hasBinding || binding.Runtime != CodexRuntimeDesktop) &&
+		a.codexThreadSubscriptionPending(opts.conversationID, opts.threadID) {
+		if _, err := a.SubscribeCodexThread(ctx, opts.conversationID, opts.threadID); err != nil {
+			// 轮询能补查终态，无法替代实时审批。保留已受理的输入并明确提示降级。
+			log.Printf("[codex-watch] observer subscription degraded; continuing with authoritative polling thread=%q: %v", opts.threadID, err)
+			progressCallbacks{onText: opts.onProgress, onEvent: opts.onProgressEvent}.emit(*codexSubscriptionDegradedProgress())
+		}
+		// 只有真实 active-writer 冲突才可能切到验证过的 Desktop follower。
+		binding, hasBinding = a.runtimeBindingForThread(opts.conversationID, opts.threadID)
+	}
 	state, initialEvents, appServerSequence, desktopEpoch, desktopRevision, err := a.attachedCodexWatchSnapshot(ctx, opts, binding, hasBinding)
 	for _, event := range codexTurnInteractions(initialEvents) {
 		a.rememberPendingCodexInteraction(opts.threadID, event)
