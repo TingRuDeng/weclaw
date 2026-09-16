@@ -25,7 +25,7 @@ env:
   PACKAGE_RUN_ID: ${{ inputs.package_run_id }}
 
 concurrency:
-  group: stable-release-${{ inputs.tag }}
+  group: weclaw-release-mirror
   cancel-in-progress: false
 
 jobs:

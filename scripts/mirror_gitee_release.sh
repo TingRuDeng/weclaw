@@ -63,7 +63,7 @@ load_gitee_token
 [[ "$GITEE_TOKEN" != *$'\n'* && "$GITEE_TOKEN" != *$'\r'* ]] || fail "GITEE_TOKEN 格式无效"
 [[ "$GITEE_CURL_MAX_TIME" =~ ^[1-9][0-9]*$ ]] || fail "GITEE_CURL_MAX_TIME 必须是正整数秒"
 
-for command_name in git curl python3 shasum gzip cp; do
+for command_name in git curl python3 shasum gzip cp gh; do
   command -v "$command_name" >/dev/null 2>&1 || fail "缺少命令：$command_name"
 done
 
@@ -212,6 +212,11 @@ print(release["id"])
 PY
 )" || fail "无法确认 Gitee Release"
 
+# 配额已满时显式启用预清理，仍保护三个完整版本和当前目标。
+if [[ "${GITEE_RETENTION_PRE_CLEAN:-false}" == true ]]; then
+  python3 "$(dirname "$0")/gitee_retention.py" "$TAG" --auth-header "$AUTH_HEADER_FILE" --apply
+fi
+
 attachment_json="$TEMP_DIR/attachments.json"
 curl -fsS "${CURL_SECURE[@]}" --get \
   -o "$attachment_json" \
@@ -309,5 +314,7 @@ asset_count="$(wc -l <"$TEMP_DIR/assets.txt" | tr -d '[:space:]')"
 for asset_name in "${EXPECTED_ASSETS[@]}"; do
   grep -Fxq "$asset_name" "$TEMP_DIR/assets.txt" || fail "Gitee Release 缺少资产：$asset_name"
 done
+
+python3 "$(dirname "$0")/gitee_retention.py" "$TAG" --auth-header "$AUTH_HEADER_FILE" --apply
 
 printf 'Gitee 镜像完成：%s\n' "$TAG"

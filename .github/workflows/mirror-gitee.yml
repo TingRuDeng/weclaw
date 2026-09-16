@@ -7,6 +7,11 @@ on:
         description: 'Existing authoritative GitHub Release tag, e.g. v0.1.249'
         required: true
 
+      pre_clean:
+        description: 'Free quota before upload while protecting three complete versions'
+        type: boolean
+        default: false
+
 permissions:
   contents: read
 
@@ -14,7 +19,7 @@ env:
   RELEASE_TAG: ${{ inputs.tag }}
 
 concurrency:
-  group: gitee-mirror-${{ inputs.tag }}
+  group: weclaw-release-mirror
   cancel-in-progress: false
 
 jobs:
@@ -42,4 +47,6 @@ jobs:
       - name: Resume and verify Gitee mirror
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GITEE_RETENTION_PRE_CLEAN: ${{ inputs.pre_clean }}
         run: scripts/mirror_gitee_release.sh "$RELEASE_TAG" "dist/$RELEASE_TAG"
