@@ -114,12 +114,19 @@ func renderTaskProgressCard(state taskViewState) (string, bool) {
 func renderTaskProgressTimeline(entries []agent.ProgressEvent, fallback string) (string, bool) {
 	lines := make([]string, 0, len(entries)+1)
 	lines = append(lines, "**执行进度**")
+	previousCommentary := false
 	for _, event := range entries {
 		display := taskProgressDisplay(event)
 		if display == "" {
 			continue
 		}
-		if event.Kind == agent.ProgressKindCommentary {
+		commentary := event.Kind == agent.ProgressKindCommentary
+		if len(lines) > 1 && (previousCommentary || commentary) {
+			// 独立的不换行空格段落保留视觉留白，避免飞书折叠连续空行。
+			lines = append(lines, "", "\u00a0", "")
+		}
+		previousCommentary = commentary
+		if commentary {
 			lines = append(lines, "", display)
 			continue
 		}

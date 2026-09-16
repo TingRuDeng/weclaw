@@ -16,7 +16,7 @@ import (
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
-func TestStaleMessageNoticeFailureRemainsDeduplicatedAcrossRestart(t *testing.T) {
+func TestStaleMessageSilentlyRemainsDeduplicatedAcrossRestart(t *testing.T) {
 	now := time.Now()
 	event := newFreshnessDMEvent("old-image", now.Add(-time.Hour), "")
 	event.Event.Message.MessageType = stringPtr("image")
@@ -37,7 +37,7 @@ func TestStaleMessageNoticeFailureRemainsDeduplicatedAcrossRestart(t *testing.T)
 	sender := &failingDirectTextSender{err: failure}
 	a.sender = sender
 	dispatch := func(context.Context, platform.IncomingMessage, platform.Replier) { t.Error("stale input dispatched") }
-	if err := a.handleMessageEvent(context.Background(), event, dispatch); !errors.Is(err, failure) {
+	if err := a.handleMessageEvent(context.Background(), event, dispatch); err != nil {
 		t.Fatalf("err=%v", err)
 	}
 	a = makeAdapter()
@@ -45,7 +45,7 @@ func TestStaleMessageNoticeFailureRemainsDeduplicatedAcrossRestart(t *testing.T)
 	if err := a.handleMessageEvent(context.Background(), event, dispatch); err != nil {
 		t.Fatal(err)
 	}
-	if len(sender.texts) != 1 || len(download.seen) != 0 {
+	if len(sender.texts) != 0 || len(download.seen) != 0 {
 		t.Fatalf("notices=%v downloads=%v", sender.texts, download.seen)
 	}
 }
@@ -178,7 +178,7 @@ func newFreshnessDMEvent(messageID string, createdAt time.Time, text string) *la
 	})
 }
 
-func TestStaleMessageNoticeAuthorizedDeduplicatedAndLimited(t *testing.T) {
+func TestStaleMessageSilentlySkipsAuthorizedMessages(t *testing.T) {
 	now := time.Now()
 	a := NewAdapter(Credentials{AppID: "test"})
 	a.now = func() time.Time { return now }
@@ -190,12 +190,12 @@ func TestStaleMessageNoticeAuthorizedDeduplicatedAndLimited(t *testing.T) {
 	if got := dispatchFeishuEvents(a, event, event, newFreshnessDMEvent("old-2", now.Add(-time.Hour), "private")); got != 0 {
 		t.Fatal("stale message dispatched")
 	}
-	if len(sender.texts) != 1 || !strings.Contains(sender.texts[0], "较早消息") || strings.Contains(sender.texts[0], "private") {
+	if len(sender.texts) != 0 {
 		t.Fatalf("notices=%v", sender.texts)
 	}
 	now = now.Add(time.Minute)
 	dispatchFeishuEvents(a, event, newFreshnessDMEvent("old-3", now.Add(-time.Hour), "private"))
-	if len(sender.texts) != 2 {
+	if len(sender.texts) != 0 {
 		t.Fatalf("notices=%v", sender.texts)
 	}
 }

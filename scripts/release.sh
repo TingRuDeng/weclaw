@@ -174,7 +174,7 @@ check_tag_available() {
 run_validations() {
   local packages
   log "运行测试与静态检查"
-  python3 "$ROOT_DIR/scripts/gitee_retention_test.py"
+  python3 -B "$ROOT_DIR/scripts/gitee_retention_test.py"
   sh "$ROOT_DIR/scripts/install_test.sh"
   python3 "$ROOT_DIR/scripts/validate_docs.py" . --profile generic
   go mod tidy -diff
