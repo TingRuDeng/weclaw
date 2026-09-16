@@ -235,10 +235,52 @@ for asset_name in "${EXPECTED_ASSETS[@]}"; do
     continue
   fi
   printf '==> 上传 Gitee 资产：%s\n' "$asset_name"
-  curl -fsS "${CURL_SECURE[@]}" \
+  upload_exit=0
+  upload_metrics="$(curl -sS "${CURL_SECURE[@]}" \
     --form "file=@${MIRROR_DIR}/${asset_name}" \
+    --dump-header "$TEMP_DIR/upload-headers" \
+    --write-out 'http=%{http_code} uploaded=%{size_upload} seconds=%{time_total}' \
     -o "$TEMP_DIR/upload-${asset_name}.json" \
-    "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/${release_id}/attach_files"
+    "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/${release_id}/attach_files")" || upload_exit=$?
+  printf '上传结果：%s curl_exit=%s %s\n' "$asset_name" "$upload_exit" "$upload_metrics"
+  if [[ "$upload_exit" -ne 0 || "$upload_metrics" != http=2[0-9][0-9]\ * ]]; then
+    python3 - "$TEMP_DIR/upload-${asset_name}.json" "$TEMP_DIR/upload-headers" <<'PY'
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+def safe(value):
+    text = str(value)
+    token = os.environ.get("GITEE_TOKEN", "")
+    if token:
+        text = text.replace(token, "[REDACTED]")
+    text = re.sub(r"(?i)((?:access_token|token|authorization|password|secret)\s*[=:]\s*)[^\s,;&]+", r"\1[REDACTED]", text)
+    return re.sub(r"[\x00-\x1f\x7f]", " ", text)[:2000]
+
+body = Path(sys.argv[1])
+if body.exists():
+    text = body.read_bytes()[:16384].decode("utf-8", errors="replace")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        print("错误正文（非 JSON）：", safe(text))
+    else:
+        if isinstance(data, dict):
+            for key in ("message", "error", "error_description", "errors"):
+                if key in data:
+                    print(key + ":", safe(data[key]))
+        else:
+            print("错误正文：", safe(data))
+headers = Path(sys.argv[2])
+if headers.exists():
+    for line in headers.read_text(errors="replace").splitlines():
+        if line.lower().startswith(("x-request-id:", "x-correlation-id:", "x-trace-id:", "server:", "retry-after:")):
+            print(safe(line))
+PY
+    fail "上传 ${asset_name} 失败，详见上方脱敏响应"
+  fi
 done
 
 printf '==> 核对 Gitee Release 资产清单\n'
