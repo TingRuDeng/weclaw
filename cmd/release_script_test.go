@@ -124,7 +124,7 @@ func TestGiteeMirrorPublishesVerifiedOfficialAssetsWithoutLeakingToken(t *testin
 		if index > 0 {
 			assetsJSON.WriteByte(',')
 		}
-		fmt.Fprintf(&assetsJSON, `{"name":%q,"browser_download_url":%q}`, name, "https://gitee.com/download/"+name)
+		fmt.Fprintf(&assetsJSON, `{"id":%d,"size":100,"name":%q,"browser_download_url":%q}`, index+1, name, "https://gitee.com/download/"+name)
 	}
 	assetsJSON.WriteString(`]`)
 	if err := os.WriteFile(checkJSON, []byte(assetsJSON.String()), 0o644); err != nil {
@@ -146,13 +146,18 @@ printf '%s\n' "$*" >>"$TEST_GIT_CALLS"
 		t.Fatal(err)
 	}
 	fakeCurl := `#!/bin/sh
-output=''
+set -e
+output="$TEST_CURL_CALLS.body"
+body_to_stdout=true
 previous=''
 url=''
 header_file=''
+write_out=''
+status=200
 for argument do
-  [ "$previous" = "-o" ] && output="$argument"
+  if [ "$previous" = "-o" ]; then output="$argument"; body_to_stdout=false; fi
   [ "$previous" = "--header" ] && header_file="${argument#@}"
+  case "$previous" in -w|--write-out) write_out="$argument" ;; esac
   case "$argument" in
     *access_token*) echo 'access_token parameter is forbidden' >&2; exit 92 ;;
   esac
@@ -172,8 +177,10 @@ case "$url" in
     else
       printf '{"message":"unauthorized"}' >"$output"
     fi
-    printf '%s' "$repo_status"
+    status="$repo_status"
     ;;
+  */releases\?*) printf '[{"id":42,"tag_name":"v9.9.9"}]' >"$output" ;;
+  */attach_files\?*) cp "$TEST_RELEASE_JSON" "$output" ;;
   */releases) printf '{"id":42,"tag_name":"v9.9.9"}' >"$output" ;;
   */releases/tags/*)
     if [ "${TEST_RELEASE_PROBE_NULL:-}" = "1" ]; then
@@ -181,11 +188,10 @@ case "$url" in
     else
       cp "$TEST_RELEASE_JSON.release" "$output"
     fi
-    printf '200'
     ;;
   */attach_files)
     case "${output##*/}" in
-      upload-*) : >"$TEST_ATTACH_READY"; printf '{}' >"$output" ;;
+      upload-*) : >"$TEST_ATTACH_READY"; printf '{}' >"$output"; status=201 ;;
       *) if [ -f "$TEST_ATTACH_READY" ]; then cp "$TEST_RELEASE_JSON" "$output"; else printf '[]' >"$output"; fi ;;
     esac
     ;;
@@ -196,6 +202,21 @@ case "$url" in
   https://gitee.com/download/*) cp "$TEST_ASSET_DIR/${url##*/}" "$output" ;;
   *) exit 91 ;;
 esac
+if [ "$body_to_stdout" = true ]; then cat "$output"; fi
+if [ -n "$write_out" ]; then
+  case "$write_out" in
+    http=*) printf 'http=%s uploaded=100 seconds=0.01' "$status" ;;
+    '%{http_code}') printf '%s' "$status" ;;
+    *) printf '\n%s' "$status" ;;
+  esac
+fi
+`
+	fakeGH := `#!/bin/sh
+if [ "$*" = "api --paginate --slurp repos/TingRuDeng/weclaw/releases?per_page=100" ]; then
+  printf '[[]]'
+  exit 0
+fi
+exit 95
 `
 	fakeSecurity := `#!/bin/sh
 printf '%s\n' "$*" >>"$TEST_SECURITY_CALLS"
@@ -209,7 +230,7 @@ exit 94
 printf 'Darwin\n'
 `
 	for name, content := range map[string]string{
-		"curl": fakeCurl, "git": fakeGit, "security": fakeSecurity, "uname": fakeUname,
+		"curl": fakeCurl, "git": fakeGit, "security": fakeSecurity, "uname": fakeUname, "gh": fakeGH,
 	} {
 		path := filepath.Join(fakeBin, name)
 		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
