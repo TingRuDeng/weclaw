@@ -82,6 +82,10 @@ macOS 上，`codex_host_mode: auto` 在启用 App 复用且安装了带官方 No
 
 首次启用 `shared` 时，完整退出旧 App，再运行 `weclaw codex app`。WeClaw 为后续 App 启动设置受保护的共享入口，并核对 `CODEX_HOME`、`CODEX_SQLITE_HOME`；显式冲突不会被覆盖。之后正常打开 App 即可，释放会话不需要重启 App 或等待后台卸载。App 重开后工具连接会刷新；其他启动配置发生变化时，需等任务结束后协调重启共享服务。切回其他 Host 模式时，只恢复仍与 WeClaw 记录一致的启动环境。整个过程不修改 App 包、签名、历史数据库或 writer-lock 文件。
 
+原生 Chrome 操作可复用 Codex App 的 Computer Use：保持 App 运行，确认 App 中已启用原生操作能力并完成系统权限授权，任务通过 `cua_repl` 的 `cua.getApp("Google Chrome")` 访问 Chrome。共享 Host 保留 App 的插件配置和官方运行时，原生工具的认证读取连接也复用现有 Host。API Key 可以用于这条原生操作路径；接管后的实际可用性仍需在共享任务中验证。
+
+Browser/Chrome 插件的浏览器专用连接是另一条路径，可能返回 `unsupported Codex auth method: apikey`；这不代表 Computer Use 操作 Chrome 也必须使用 ChatGPT OAuth。旧版 Chrome 插件的精确 `node_repl/js` 动态工具仍由 App 执行，WeClaw 等待 App 返回结果；`cua_repl` 则是共享 Host 加载的 MCP 工具，不通过动态工具白名单转交。WeClaw 不直接连接 Chrome native pipe，也不更改上游认证或系统授权。
+
 共享模式中的普通输入每次读取原 thread 的权威状态：运行中发送带当前 `turnId` 的补充指令，空闲时开始下一轮。App、官方 CLI、飞书和微信可以同时选择同一 thread，上游按请求接受顺序处理。
 
 会话 binding 只表示当前窗口选择，不是写入所有权。`/cx switch` 与 `/cx new` 会先确认默认共享 Host 可达并用轻量 `thread/read` 验证目标；Host 或目标不可读时保留原 binding，验证通过后立即提交新 binding。v14 状态中的 `preparing/ready` 继续表示 follower observer 的同步阶段并兼容旧版本回滚，但不再决定普通消息能否写入。历史回放、进度卡或 exact-turn observer 建立失败只把“进度同步”标记为“同步中”或“已降级”，不会回滚已经成功的 binding。

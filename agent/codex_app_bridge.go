@@ -286,6 +286,12 @@ func (a *ACPAgent) RunCodexAppBridge(ctx context.Context, args []string, input i
 	if a.codexHostMode != codexHostModeShared {
 		return fmt.Errorf("Codex App bridge requires shared Host mode")
 	}
+	// 原生工具沿用 App 的 CLI 入口读取认证；这类无配置覆盖的连接只能
+	// 复用现有 Host，不能把工具的 stdio 参数写成 App 的启动配置。
+	if slices.Equal(args, []string{"app-server", "--listen", "stdio://"}) ||
+		slices.Equal(args, []string{"app-server", "--listen=stdio://"}) {
+		return a.runCodexAppToolClient(ctx, input, output)
+	}
 	binary, err := a.resolveCodexDaemonLifecycleCommand()
 	if err != nil {
 		return err
@@ -317,6 +323,31 @@ func (a *ACPAgent) RunCodexAppBridge(ctx context.Context, args []string, input i
 		return err
 	}
 	defer conn.Close()
+	return relayCodexAppBridge(ctx, conn, input, output)
+}
+
+func (a *ACPAgent) runCodexAppToolClient(ctx context.Context, input io.Reader, output io.Writer) error {
+	if err := a.validateCodexLiveTestPathIsolation(); err != nil {
+		return err
+	}
+	socket, err := a.resolveCodexAppSharedSocket()
+	if err != nil {
+		return err
+	}
+	if err := validateCodexHostDirectory(filepath.Dir(socket), a.allowedCodexHostDirectoryUIDs()); err != nil {
+		return fmt.Errorf("原生工具无法使用现有 Codex 共享 Host: %w", err)
+	}
+	if err := validateExistingCodexHostSocket(socket, a.allowedCodexHostUIDs()); err != nil {
+		return err
+	}
+	conn, err := dialCodexHost(ctx, socket)
+	if err != nil {
+		return fmt.Errorf("原生工具无法连接现有 Codex 共享 Host；请先打开已接入共享服务的 Codex App: %w", err)
+	}
+	defer conn.Close()
+	if err := a.preflightConnectedManagedCodexHost(ctx, socket); err != nil {
+		return err
+	}
 	return relayCodexAppBridge(ctx, conn, input, output)
 }
 

@@ -232,3 +232,29 @@ func resultCardMainMarkdown(t *testing.T, card map[string]any) string {
 	t.Fatal("main markdown element missing")
 	return ""
 }
+
+func TestRecentTaskResultCardsPreserveFullOriginalInOrder(t *testing.T) {
+	var body strings.Builder
+	for i := 0; i < 700; i++ {
+		fmt.Fprintf(&body, "- 项目 %04d：[本地文件](/workspace/file.go:12) [链接](https://example.com)\n", i)
+	}
+	body.WriteString("\n```go\nfmt.Println(42)\n```\n")
+	cards, err := buildResultCards(resultCardOptions{Title: "最近任务结果", Status: cardStatusDone, Content: body.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cards) < 2 {
+		t.Fatal("expected long result to split")
+	}
+	var restored strings.Builder
+	for i, raw := range cards {
+		card := parseResultCard(t, raw)
+		if got, want := resultCardHeaderTitle(t, card), fmt.Sprintf("最近任务结果 · %d/%d", i+1, len(cards)); got != want {
+			t.Fatalf("title=%q want=%q", got, want)
+		}
+		restored.WriteString(resultCardMainMarkdown(t, card))
+	}
+	if restored.String() != body.String() {
+		t.Fatal("replay text, links or order changed")
+	}
+}

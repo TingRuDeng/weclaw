@@ -560,6 +560,7 @@ func (a *ACPAgent) readCodexAppServerThreadSnapshotResultWithItems(
 		thread.Turns = []codexTurnSnapshot{turn}
 	}
 	state = codexThreadStateFromSnapshot(thread)
+	state.LastTurnBodyLoaded = loadItems
 	if found {
 		state.Active = turn.Status == "inProgress"
 		if state.Active {

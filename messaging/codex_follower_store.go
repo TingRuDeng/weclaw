@@ -373,6 +373,12 @@ func (h *Handler) terminalOutboxDeliveryDecision(registry *platform.Registry, en
 	if !registry.AllowsStoredIdentity(entry.Route.Platform, entry.Route.AccountID, []string{guard.AuthorizedIdentity}) {
 		return false, "identity_not_allowed"
 	}
+	if entry.ReplaySelectionID != "" {
+		binding := h.ensureCodexSessions().remoteSelectionSnapshot(guard.FollowerBindingKey, guard.FollowerThreadID).Binding
+		if binding.ResultReplay.ID != entry.ReplaySelectionID || binding.ActiveWorkspace != binding.ResultReplay.WorkspaceRoot || binding.Workspaces[binding.ActiveWorkspace].ThreadID != guard.FollowerThreadID {
+			return false, "replay_selection_changed"
+		}
+	}
 	snapshot, ok := h.ensureCodexSessions().followerSnapshot(guard.FollowerBindingKey)
 	if !ok {
 		return false, "follower_missing"
@@ -535,6 +541,9 @@ func (s *codexSessionStore) commitFollowerTurnState(
 	binding.FollowTurnID = turnID
 	binding.FollowTurnInitialized = initialized
 	binding.FollowTurnPending = pending
+	if initialized && turnID != "" {
+		binding.ResultReplay.ObservedTurnID = turnID
+	}
 	nextBindings[snapshot.BindingKey] = binding
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := s.persistCandidate(s.filePath, codexSessionState{

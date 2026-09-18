@@ -108,13 +108,61 @@ func assertUserInputResult(t *testing.T, ctx context.Context, result <-chan agen
 	}
 }
 
-func TestUserInputHandlerRejectsQuestionWithoutOptions(t *testing.T) {
+func TestUserInputHandlerAcceptsFreeTextQuestion(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := newUserInputCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	request := agent.UserInputRequest{RequestID: "request-1", Questions: []agent.UserInputQuestion{{ID: "question-1"}}}
-	_, err := h.userInputHandlerForRoute(interactionTestOptions(reply))(context.Background(), request)
-	if err == nil || !strings.Contains(err.Error(), "不支持自由文本问答") {
-		t.Fatalf("error = %v", err)
+	result := make(chan agent.UserInputAnswers, 1)
+	go func() {
+		answers, _ := h.userInputHandlerForRoute(interactionTestOptions(reply))(ctx, request)
+		result <- answers
+	}()
+
+	waitUntil(t, func() bool {
+		return containsText(reply.textsSnapshot(), "请直接回复文本内容")
+	})
+	if got := h.consumePendingApprovalText("user-1", "user-1", "用户的自由文本答案"); got != approvalTextConsumed {
+		t.Fatalf("自由文本答案未被消费，结果=%v", got)
+	}
+	select {
+	case answers := <-result:
+		if got := answers["question-1"]; len(got) != 1 || got[0] != "用户的自由文本答案" {
+			t.Fatalf("answers = %#v", answers)
+		}
+	case <-ctx.Done():
+		t.Fatal("自由文本问答未返回")
+	}
+}
+
+func TestFreeTextQuestionDoesNotConsumeBlankOrOtherRoute(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newUserInputCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	request := agent.UserInputRequest{RequestID: "request-1", Questions: []agent.UserInputQuestion{{ID: "question-1", Prompt: "请输入"}}}
+	result := make(chan agent.UserInputAnswers, 1)
+	opts := interactionTestOptions(reply)
+	opts.routeUserID = "feishu:route-a"
+	go func() {
+		answers, _ := h.userInputHandlerForRoute(opts)(ctx, request)
+		result <- answers
+	}()
+	waitUntil(t, func() bool { return containsText(reply.textsSnapshot(), "请输入") })
+	if got := h.consumePendingApprovalText("user-1", "feishu:route-a", "   "); got != approvalTextUnmatched {
+		t.Fatalf("空白文本不应消费问题，结果=%v", got)
+	}
+	if got := h.consumePendingApprovalText("user-1", "feishu:route-b", "答案"); got != approvalTextUnmatched {
+		t.Fatalf("其他 route 的文本不应消费问题，结果=%v", got)
+	}
+	if got := h.consumePendingApprovalText("user-1", "feishu:route-a", "答案"); got != approvalTextConsumed {
+		t.Fatalf("当前 route 的自由文本未被消费，结果=%v", got)
+	}
+	select {
+	case <-result:
+	case <-ctx.Done():
+		t.Fatal("自由文本问答未结束")
 	}
 }
 

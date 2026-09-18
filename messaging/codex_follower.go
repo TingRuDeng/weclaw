@@ -587,6 +587,9 @@ func (h *Handler) commitOwnedCodexFollowerAttachReady(
 
 func (h *Handler) reconcileInactiveCodexFollower(snapshot codexFollowerSnapshot, state externalCodexTaskState) error {
 	turnID := strings.TrimSpace(state.LastTurnID)
+	if h.codexReplayOwnsTerminal(snapshot, turnID) {
+		return h.ensureCodexSessions().commitFollowerTurnClaim(snapshot, turnID)
+	}
 	if !snapshot.FollowTurnInitialized {
 		return h.ensureCodexSessions().commitFollowerTurnClaim(snapshot, turnID)
 	}

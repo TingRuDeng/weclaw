@@ -91,6 +91,8 @@ type pendingStreamSupersede struct {
 }
 
 type terminalOutboxEntry struct {
+	ReplaySelectionID    string                           `json:"replay_selection_id,omitempty"`
+	ReplayTurnID         string                           `json:"replay_turn_id,omitempty"`
 	ID                   string                           `json:"id"`
 	Route                platform.DeliveryRoute           `json:"route"`
 	AgentName            string                           `json:"agent_name,omitempty"`
@@ -125,6 +127,8 @@ type terminalOutboxEntry struct {
 }
 
 type terminalOutboxDraft struct {
+	ReplaySelectionID    string
+	ReplayTurnID         string
 	ID                   string
 	Route                platform.DeliveryRoute
 	AgentName            string
@@ -228,6 +232,7 @@ type terminalOutbox struct {
 	deliveryAllowed  func(*terminalOutboxEntry) bool
 	deliveryDecision func(*terminalOutboxEntry) (bool, string)
 	deliveryBarrier  *sync.RWMutex
+	replayDelivered  func(*terminalOutboxEntry) error
 }
 
 // DefaultTerminalOutboxFile 返回终态 outbox 的主机级状态文件。
@@ -256,6 +261,7 @@ func (h *Handler) StartTerminalOutbox(ctx context.Context, registry *platform.Re
 		return h.terminalOutboxDeliveryDecision(registry, entry)
 	}
 	outbox.deliveryBarrier = &h.codexFollowerDeliveryMu
+	outbox.replayDelivered = h.commitCodexReplayDelivered
 	h.terminalOutboxMu.Lock()
 	if h.terminalOutbox != nil {
 		h.terminalOutboxMu.Unlock()
@@ -698,6 +704,7 @@ func (o *terminalOutbox) enqueueWithState(draft terminalOutboxDraft, preparing b
 	}
 	entry := &terminalOutboxEntry{
 		ID: entryID, Route: draft.Route,
+		ReplaySelectionID: draft.ReplaySelectionID, ReplayTurnID: draft.ReplayTurnID,
 		AgentName: strings.TrimSpace(draft.AgentName), Failed: draft.Failed, Stopped: draft.Stopped,
 		AuthorizedIdentity: strings.TrimSpace(draft.AuthorizedIdentity),
 		FollowerBindingKey: strings.TrimSpace(draft.FollowerBindingKey),
@@ -789,6 +796,7 @@ func sameTerminalOutboxPayload(existing *terminalOutboxEntry, candidate *termina
 		return existing == nil && candidate == nil
 	}
 	return existing.ID == candidate.ID &&
+		existing.ReplaySelectionID == candidate.ReplaySelectionID && existing.ReplayTurnID == candidate.ReplayTurnID &&
 		existing.AgentName == candidate.AgentName && existing.Failed == candidate.Failed &&
 		existing.AuthorizedIdentity == candidate.AuthorizedIdentity &&
 		existing.FollowerBindingKey == candidate.FollowerBindingKey &&
@@ -1818,7 +1826,16 @@ func (o *terminalOutbox) attempt(parent context.Context, id string, preferred pl
 				cancel()
 			}
 			if err == nil {
-				err = o.markDelivered(id, stage)
+				if stage == terminalOutboxTextStage && entry.ReplaySelectionID != "" {
+					if o.replayDelivered == nil {
+						err = fmt.Errorf("result replay receipt store unavailable")
+					} else {
+						err = o.replayDelivered(entry)
+					}
+				}
+				if err == nil {
+					err = o.markDelivered(id, stage)
+				}
 			}
 			results <- stageResult{stage: stage, err: err}
 		}()
@@ -2335,6 +2352,11 @@ func validateTerminalOutboxEntry(entry *terminalOutboxEntry) error {
 	guard := terminalDeliveryGuardFromEntry(entry)
 	if !guard.empty() && !guard.complete() {
 		return fmt.Errorf("incomplete terminal follower delivery guard")
+	}
+	if entry.ReplaySelectionID != "" || entry.ReplayTurnID != "" {
+		if !guard.complete() || entry.ReplaySelectionID == "" || entry.ReplayTurnID == "" || !entry.RichResult || strings.TrimSpace(entry.Text) == "" {
+			return fmt.Errorf("incomplete result replay delivery")
+		}
 	}
 	if entry.Stream == nil && entry.Checkpoint == nil && strings.TrimSpace(entry.Text) == "" && strings.TrimSpace(entry.Notification) == "" && len(entry.PendingSupersedes) == 0 {
 		return fmt.Errorf("terminal outbox entry has no payload")

@@ -116,7 +116,7 @@ func (h *Handler) resolveExternalCodexTask(opts externalCodexTaskOptions) resolv
 	if rollout.err != nil || rollout.active {
 		return rollout
 	}
-	if runtime.active || runtime.err != nil {
+	if runtime.active || runtime.err != nil || runtime.confirmedInactive {
 		return runtime
 	}
 	return rollout

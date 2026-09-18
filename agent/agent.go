@@ -148,6 +148,8 @@ type CodexThreadState struct {
 	WaitingOnUserInput   bool
 	Preview              string
 	LastAgentMessageText string
+	// LastTurnBodyLoaded 区分已完整读取的空正文和只读取元数据的状态。
+	LastTurnBodyLoaded bool
 }
 
 // CodexThreadRuntimeAgent 暴露 Codex App 已运行 thread 的接管能力。

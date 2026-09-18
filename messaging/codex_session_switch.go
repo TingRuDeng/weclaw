@@ -185,6 +185,9 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 			lines = append(lines, renderExternalCodexActiveNotice(result.externalState)...)
 		}
 	}
+	if result.latestIdleResultNotice != "" {
+		lines = append(lines, result.latestIdleResultNotice)
+	}
 	if !result.suppressLatestIdleResult {
 		lines = append(lines, renderLatestIdleCodexTaskResult(latestIdleCodexState(result))...)
 	}
@@ -202,7 +205,7 @@ const latestIdleCodexTaskResultRunes = 800
 
 func latestIdleCodexState(result codexSessionAcquireResult) agent.CodexThreadState {
 	state := result.externalState.CodexThreadState
-	if !result.externalActive && strings.TrimSpace(state.LastTurnID) == "" {
+	if !result.externalActive && !state.LastTurnBodyLoaded && strings.TrimSpace(state.LastTurnID) == "" {
 		state = result.resolution.Binding.State
 	}
 	return state
@@ -215,9 +218,12 @@ func renderLatestIdleCodexTaskResult(state agent.CodexThreadState) []string {
 	status := strings.ToLower(strings.TrimSpace(state.LastTurnStatus))
 	switch status {
 	case "completed":
+		if !state.LastTurnBodyLoaded && strings.TrimSpace(state.LastAgentMessageText) == "" {
+			return []string{"最近结果暂未读取成功，可再次选择当前会话重试"}
+		}
 		text := firstNonBlank(
 			strings.TrimSpace(state.LastAgentMessageText),
-			"Codex App 本地任务已完成，但没有返回文本。",
+			"最近任务已完成，未记录文本结果",
 		)
 		return []string{
 			"最近任务: 已完成",

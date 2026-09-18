@@ -58,6 +58,7 @@ func (s *codexSessionStore) load() {
 			ActiveWorkspace:           normalizeCodexWorkspaceRoot(binding.ActiveWorkspace),
 			Workspaces:                make(map[string]codexWorkspaceSession),
 			PresentedResultTurns:      make(map[string]string),
+			ResultReplay:              binding.ResultReplay,
 			FollowRevision:            binding.FollowRevision,
 			Follower:                  normalizeCodexFrontendFollower(binding.Follower),
 			FollowerAttachRevision:    binding.FollowerAttachRevision,
@@ -224,6 +225,19 @@ func mergeCodexSessionBinding(current codexSessionBinding, incoming codexSession
 	for workspaceRoot, session := range incoming.Workspaces {
 		current.Workspaces[workspaceRoot] = mergeCodexWorkspaceSession(current.Workspaces[workspaceRoot], session)
 	}
+	if incoming.ResultReplay.ID != "" && incoming.ResultReplay.WorkspaceRoot == current.ActiveWorkspace &&
+		incoming.ResultReplay.ThreadID == current.Workspaces[current.ActiveWorkspace].ThreadID {
+		if current.ResultReplay.ID == "" {
+			current.ResultReplay = incoming.ResultReplay
+		} else if current.ResultReplay.ID == incoming.ResultReplay.ID {
+			if current.ResultReplay.PresentedTurnID == "" {
+				current.ResultReplay.PresentedTurnID = incoming.ResultReplay.PresentedTurnID
+			}
+			if current.ResultReplay.ObservedTurnID == "" {
+				current.ResultReplay.ObservedTurnID = incoming.ResultReplay.ObservedTurnID
+			}
+		}
+	}
 	return current
 }
 
@@ -285,6 +299,7 @@ func (s *codexSessionStore) snapshotCodexSessionState() (string, codexSessionSta
 		state.Bindings[key] = codexSessionBinding{
 			ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces,
 			PresentedResultTurns: cloneCodexPresentedResultTurns(binding.PresentedResultTurns),
+			ResultReplay:         binding.ResultReplay,
 			FollowRevision:       binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
 			FollowerAttachRevision:    binding.FollowerAttachRevision,
 			FollowerAttachPhase:       binding.FollowerAttachPhase,

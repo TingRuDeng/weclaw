@@ -64,7 +64,14 @@ func decodeCodexDynamicToolCall(params json.RawMessage) (codexDynamicToolCallPar
 func (call codexDynamicToolCallParams) isCodexAppTool() bool {
 	namespace := strings.ToLower(strings.TrimSpace(call.Namespace))
 	tool := strings.ToLower(strings.TrimSpace(call.Tool))
-	return namespace == "codex_app" || strings.HasPrefix(tool, "codex_app__")
+	switch {
+	case namespace == "codex_app", strings.HasPrefix(tool, "codex_app__"):
+		return true
+	case namespace == "node_repl" && tool == "js":
+		return true
+	default:
+		return false
+	}
 }
 
 // codexAppFrontendPresent uses the existing local Desktop presence seams. It

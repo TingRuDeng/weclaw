@@ -184,3 +184,35 @@ func TestCodexFullTurnFallbackRejectsLatestTurnChangingBetweenReads(t *testing.T
 		t.Fatalf("error=%v, want target-turn change rejection", err)
 	}
 }
+
+func TestCodexResultCompletenessDistinguishesMetadataEmptyAndFailure(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir()})
+	failItems := false
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"t","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[{"id":"last","status":"completed","items":[]}],"nextCursor":null}`), nil
+		case "thread/items/list":
+			if failItems {
+				return nil, errors.New("history unavailable")
+			}
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		}
+		return nil, fmt.Errorf("unexpected method %s", method)
+	}
+	light, _, _, _, err := a.readCodexAppServerThreadSnapshotResultWithItems(context.Background(), "t", "", false)
+	if err != nil || light.LastTurnBodyLoaded || light.LastTurnID != "last" {
+		t.Fatalf("metadata completeness: %+v %v", light, err)
+	}
+	full, _, _, _, err := a.readCodexAppServerThreadSnapshotResult(context.Background(), "t", "")
+	if err != nil || !full.LastTurnBodyLoaded || full.LastAgentMessageText != "" {
+		t.Fatalf("empty complete history: %+v %v", full, err)
+	}
+	failItems = true
+	failed, _, _, _, err := a.readCodexAppServerThreadSnapshotResult(context.Background(), "t", "")
+	if err == nil || failed.LastTurnBodyLoaded {
+		t.Fatalf("failed read marked complete: %+v %v", failed, err)
+	}
+}

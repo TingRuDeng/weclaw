@@ -151,6 +151,14 @@ func (a *ACPAgent) ReadCodexThreadProgressSnapshot(ctx context.Context, conversa
 				return CodexThreadState{}, nil, ErrCodexRuntimeUnavailable
 			}
 			state, batch, err := a.desktopRuntime.activeWatchSnapshot(threadID)
+			if err == nil && !state.Active {
+				// 完整 history 的 revision 屏障成功后，才把空正文解释为真实空结果。
+				if err := a.desktopRuntime.LoadHistory(ctx, CodexThreadRef{ThreadID: threadID}); err != nil {
+					return CodexThreadState{}, nil, err
+				}
+				state, batch, err = a.desktopRuntime.activeWatchSnapshot(threadID)
+				state.LastTurnBodyLoaded = err == nil
+			}
 			return state, projectCodexVisibleProgressEvents(batch.Events), err
 		case CodexRuntimeUnknown:
 			if !a.officialDaemonIsAuthoritativeForUnknownBinding() {

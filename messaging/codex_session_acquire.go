@@ -58,6 +58,7 @@ type codexSessionAcquireResult struct {
 	handoffReleaseRetainedByTask bool
 	suppressLatestIdleResult     bool
 	latestIdleResultClaimErr     error
+	latestIdleResultNotice       string
 }
 
 // acquireCodexSessionWithBindingLocked atomically commits one frontend's
@@ -109,8 +110,8 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 	preBindRuntime, preBindRuntimeErr := liveAgent.CurrentCodexRuntime(providerRequest)
 	unlockFollowerDelivery := func() {}
 	if req.platform == platform.PlatformFeishu {
-		h.codexFollowerDeliveryMu.RLock()
-		unlockFollowerDelivery = h.codexFollowerDeliveryMu.RUnlock
+		h.codexFollowerDeliveryMu.Lock()
+		unlockFollowerDelivery = h.codexFollowerDeliveryMu.Unlock
 		if !h.codexFollowerIdentityAuthorized(req.platform, req.accountID, req.authorizedIdentity) {
 			unlockFollowerDelivery()
 			return codexSessionAcquireResult{}, errCodexFollowerAccessChanged
@@ -182,7 +183,11 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 	)
 	result, err = h.attachCodexAcquireObserver(result, req, liveAgent)
 	if err == nil {
-		result = h.claimLatestIdleCodexResult(result)
+		if req.platform == platform.PlatformFeishu {
+			result = h.queueLatestIdleCodexReplay(result)
+		} else {
+			result = h.claimLatestIdleCodexResult(result)
+		}
 	}
 	if result.runtimeErr != nil {
 		result = h.recordCodexRuntimeRecoveryResult(req, result)
@@ -196,6 +201,9 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 
 func (h *Handler) claimLatestIdleCodexResult(result codexSessionAcquireResult) codexSessionAcquireResult {
 	state := latestIdleCodexState(result)
+	if !state.LastTurnBodyLoaded && strings.TrimSpace(state.LastAgentMessageText) == "" {
+		return result
+	}
 	if len(renderLatestIdleCodexTaskResult(state)) == 0 {
 		result.suppressLatestIdleResult = true
 		return result

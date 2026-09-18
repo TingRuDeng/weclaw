@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 var (
@@ -205,6 +207,7 @@ func cloneCodexSessionBindings(source map[string]codexSessionBinding) map[string
 		cloned[key] = codexSessionBinding{
 			ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces,
 			PresentedResultTurns: cloneCodexPresentedResultTurns(binding.PresentedResultTurns),
+			ResultReplay:         binding.ResultReplay,
 			FollowRevision:       binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
 			FollowerAttachRevision:    binding.FollowerAttachRevision,
 			FollowerAttachPhase:       binding.FollowerAttachPhase,
@@ -231,7 +234,7 @@ func sameCodexSessionBindings(left map[string]codexSessionBinding, right map[str
 }
 
 func sameCodexSessionBinding(left codexSessionBinding, right codexSessionBinding) bool {
-	if left.ActiveWorkspace != right.ActiveWorkspace || left.FollowRevision != right.FollowRevision ||
+	if left.ResultReplay != right.ResultReplay || left.ActiveWorkspace != right.ActiveWorkspace || left.FollowRevision != right.FollowRevision ||
 		left.FollowerAttachRevision != right.FollowerAttachRevision ||
 		left.FollowerAttachPhase != right.FollowerAttachPhase ||
 		left.FollowerAttachTurnID != right.FollowerAttachTurnID ||
@@ -291,6 +294,13 @@ func selectCodexRemoteWorkspace(bindings map[string]codexSessionBinding, update 
 		binding.Workspaces = make(map[string]codexWorkspaceSession)
 	}
 	changed := binding.ActiveWorkspace != update.WorkspaceRoot
+	if binding.ResultReplay.ID == "" || binding.ResultReplay.WorkspaceRoot != update.WorkspaceRoot || binding.ResultReplay.ThreadID != update.TargetThreadID || binding.Workspaces[binding.ActiveWorkspace].ThreadID != update.TargetThreadID || changed {
+		binding.ResultReplay = codexResultReplaySelection{ID: uuid.NewString(), WorkspaceRoot: update.WorkspaceRoot, ThreadID: update.TargetThreadID}
+		changed = true
+	}
+	if update.FollowerTurnPending {
+		binding.ResultReplay.ObservedTurnID = update.FollowerTurnID
+	}
 	binding.ActiveWorkspace = update.WorkspaceRoot
 	for root, session := range binding.Workspaces {
 		if root == update.WorkspaceRoot || strings.TrimSpace(session.ThreadID) != update.TargetThreadID {

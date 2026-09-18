@@ -215,6 +215,16 @@ func (h *Handler) askUserInputQuestion(ctx context.Context, req userInputQuestio
 	}
 	defer h.clearPendingApproval(req.opts.actorUserID, pending)
 	choices := userInputPlatformChoices(options, key, req.opts)
+	if len(options) == 0 {
+		prompt := userInputPrompt(req.question)
+		if err := req.opts.reply.SendText(ctx, prompt+"\n\n请直接回复文本内容。此回复只会提交给当前 Codex 问题。\n\n问题等待 5 分钟后失效。"); err != nil {
+			if req.opts.lease.isDetached() {
+				return "", agent.ErrCodexObserverDetached
+			}
+			return "", err
+		}
+		return waitForUserInputChoice(ctx, pending, req.opts.lease, req.resolution)
+	}
 	if err := req.opts.reply.AskChoices(ctx, userInputPrompt(req.question), choices); err != nil {
 		if req.opts.lease.isDetached() {
 			return "", agent.ErrCodexObserverDetached
@@ -230,7 +240,7 @@ func buildUserInputOptions(req userInputQuestionRequest) (string, []agent.Approv
 		return "", nil, fmt.Errorf("结构化问答包含空 question ID")
 	}
 	if len(req.question.Options) == 0 {
-		return "", nil, fmt.Errorf("问题 %s 不支持自由文本问答", questionID)
+		return strings.TrimSpace(req.requestID) + ":" + questionID, nil, nil
 	}
 	seen := make(map[string]bool, len(req.question.Options))
 	options := make([]agent.ApprovalOption, 0, len(req.question.Options))

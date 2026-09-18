@@ -26,7 +26,10 @@ type resultCardOptions struct {
 // buildResultCards 把一个逻辑终态结果渲染为一组有序静态卡片；每张卡都在本地完成容量预检。
 func buildResultCards(opts resultCardOptions) ([]string, error) {
 	status := resultCardStatus(opts.Status)
-	content := rewriteFeishuLocalMarkdownLinks(opts.Content)
+	content := opts.Content
+	if strings.TrimSpace(opts.Title) != "最近任务结果" {
+		content = rewriteFeishuLocalMarkdownLinks(content)
+	}
 	if strings.TrimSpace(content) == "" {
 		content = statusDefaultContent(status)
 	}
@@ -78,7 +81,10 @@ func compactResultCardTitle(title string) string {
 }
 
 func resultCardTitle(base string, index int, total int) string {
-	title := base + " · 最终结果"
+	title := base
+	if !strings.HasSuffix(base, "最近任务结果") {
+		title += " · 最终结果"
+	}
 	if total > 1 {
 		title += fmt.Sprintf(" · %d/%d", index, total)
 	}

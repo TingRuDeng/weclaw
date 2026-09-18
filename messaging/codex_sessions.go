@@ -41,6 +41,7 @@ type codexSessionBinding struct {
 	ActiveWorkspace           string
 	Workspaces                map[string]codexWorkspaceSession
 	PresentedResultTurns      map[string]string
+	ResultReplay              codexResultReplaySelection `json:",omitzero"`
 	FollowRevision            uint64
 	Follower                  *codexFrontendFollower
 	FollowerAttachRevision    uint64

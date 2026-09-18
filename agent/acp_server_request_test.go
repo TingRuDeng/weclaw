@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -246,6 +247,102 @@ func TestACPAgentDefersCodexAppDynamicToolCallForSharedDaemon(t *testing.T) {
 
 			if got := output.Len(); got != 0 {
 				t.Fatalf("shared daemon follower wrote %d bytes for Codex App dynamic tool: %s", got, output.String())
+			}
+		})
+	}
+}
+
+func TestACPAgentDefersNativeChromeDynamicToolCallForSharedHost(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      string
+		namespace string
+		tool      string
+	}{
+		{name: "shared host", mode: codexHostModeShared, namespace: "node_repl", tool: "js"},
+		{name: "shared daemon", mode: codexHostModeDaemon, namespace: "node_repl", tool: "js"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a, output := newACPServerRequestTestAgent(t)
+			a.codexHostMode = test.mode
+			a.codexDesktopCoordination = test.mode == codexHostModeDaemon
+			a.codexDesktopPresenceCall = func() (bool, bool) { return true, true }
+			a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+
+			a.handleACPWireLine(fmt.Sprintf(`{"jsonrpc":"2.0","id":64,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-64","namespace":%q,"tool":%q,"arguments":{"code":"await browser.tabs.list()"}}}`, test.namespace, test.tool))
+			if got := output.Len(); got != 0 {
+				t.Fatalf("native Chrome dynamic tool was answered locally: %s", output.String())
+			}
+			if !a.dispatchCodexKnownNotification(rpcResponse{
+				Method: "serverRequest/resolved",
+				Params: json.RawMessage(`{"threadId":"thread-1","requestId":64}`),
+			}, "") {
+				t.Fatal("serverRequest/resolved notification was not consumed after deferred native Chrome tool")
+			}
+		})
+	}
+}
+
+func TestACPAgentRejectsUnknownNodeReplDynamicTool(t *testing.T) {
+	a, output := newACPServerRequestTestAgent(t)
+	a.codexHostMode = codexHostModeShared
+	a.codexDesktopPresenceCall = func() (bool, bool) { return true, true }
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+
+	a.handleACPWireLine(`{"jsonrpc":"2.0","id":65,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-65","namespace":"node_repl","tool":"eval","arguments":{}}}`)
+
+	var response struct {
+		ID     int64 `json:"id"`
+		Result struct {
+			Success *bool `json:"success"`
+		} `json:"result"`
+	}
+	decodeACPServerResponse(t, output, &response)
+	if response.ID != 65 || response.Result.Success == nil || *response.Result.Success {
+		t.Fatalf("response=%+v, unknown node_repl tool must fail closed", response)
+	}
+}
+
+func TestACPAgentRejectsNativeChromeDynamicToolWithoutAppFrontend(t *testing.T) {
+	tests := []struct {
+		name                string
+		mode                string
+		frontendPresent     bool
+		desktopCoordination bool
+	}{
+		{name: "managed host", mode: codexHostModeManaged, frontendPresent: true, desktopCoordination: true},
+		{name: "shared daemon without App", mode: codexHostModeDaemon, frontendPresent: false, desktopCoordination: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a, output := newACPServerRequestTestAgent(t)
+			a.codexHostMode = test.mode
+			a.codexDesktopCoordination = test.desktopCoordination
+			a.codexDesktopPresenceCall = func() (bool, bool) {
+				return test.frontendPresent, test.frontendPresent
+			}
+			a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+
+			a.handleACPWireLine(`{"jsonrpc":"2.0","id":66,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-66","namespace":"node_repl","tool":"js","arguments":{}}}`)
+
+			var response struct {
+				ID     int64 `json:"id"`
+				Result struct {
+					ContentItems []struct {
+						Text string `json:"text"`
+					} `json:"contentItems"`
+					Success *bool `json:"success"`
+				} `json:"result"`
+			}
+			decodeACPServerResponse(t, output, &response)
+			if response.ID != 66 || response.Result.Success == nil || *response.Result.Success {
+				t.Fatalf("response=%+v, native Chrome tool must fail closed", response)
+			}
+			if len(response.Result.ContentItems) != 1 || !strings.Contains(response.Result.ContentItems[0].Text, "Codex App") {
+				t.Fatalf("contentItems=%+v, want Codex App guidance", response.Result.ContentItems)
 			}
 		})
 	}

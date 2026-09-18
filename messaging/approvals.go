@@ -714,6 +714,9 @@ func (p *pendingApproval) resolveChoice(choice string) string {
 	if resolved := p.aliases[strings.ToLower(choice)]; resolved != "" {
 		return resolved
 	}
+	if p.kind == platform.ChoiceInteractionUserInput && len(p.allowed) == 0 {
+		return choice
+	}
 	return ""
 }
 
