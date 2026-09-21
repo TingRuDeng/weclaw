@@ -78,11 +78,16 @@ func (g *codexAppServerGate) beginExclusive() error {
 // beginForcedExclusive blocks new turns without waiting for already admitted
 // turns. The caller has explicit authority to terminate their Host, so those
 // permits must not veto the operation they are about to be interrupted by.
+// A failed gate may enter this recovery path only under that explicit force;
+// finishExclusive retains the failure if the termination transaction does not
+// commit.
 func (g *codexAppServerGate) beginForcedExclusive() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.state == codexAppServerFailed {
-		return g.unavailableErrorLocked()
+		g.state = codexAppServerDraining
+		g.notifyLocked()
+		return nil
 	}
 	if g.state != codexAppServerRunning {
 		return ErrCodexWriterBusy
@@ -97,7 +102,7 @@ func (g *codexAppServerGate) beginForcedExclusive() error {
 func (g *codexAppServerGate) finishExclusive(committed bool, available bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !available {
+	if !available || g.failure != nil {
 		g.state = codexAppServerFailed
 		g.notifyLocked()
 		return

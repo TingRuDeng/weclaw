@@ -336,6 +336,7 @@ func TestPrepareCodexRestartForceStopsCurrentUnknownHostDuringActiveTurn(t *test
 		managedStopCalls++
 		return errors.New("force must not require stale management identity")
 	}
+	a.ensureCodexAppServerGate().fail(ErrCodexRuntimeUnavailable)
 	persistCalls := 0
 
 	snapshot, err := a.PrepareCodexRestartWithOptions(

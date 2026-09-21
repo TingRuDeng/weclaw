@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 var codexProviderTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 var codexThreadIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var codexCatalogHostIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
+var codexHistoryEndByteOffsetPattern = regexp.MustCompile(`"end_byte_offset"\s*:\s*([0-9]+)`)
 
 var codexResponseItemPrefixes = map[string]string{
 	"additional_tools":        "at",
@@ -55,6 +57,7 @@ type codexProviderMigrationResult struct {
 	RolloutPath      string
 	BackupDir        string
 	Transform        codexRolloutProviderTransformResult
+	LineageRepairs   int
 }
 
 type codexRolloutProviderTransformResult struct {
@@ -83,7 +86,26 @@ type codexProviderMigrationManifest struct {
 	TargetProvider   string                              `json:"targetProvider"`
 	CatalogRows      []codexProviderCatalogRow           `json:"catalogRows,omitempty"`
 	Transform        codexRolloutProviderTransformResult `json:"transform"`
+	LineageRepairs   []codexProviderLineageRepair        `json:"lineageRepairs,omitempty"`
 	UpdatedAt        time.Time                           `json:"updatedAt"`
+}
+
+type codexProviderLineageRepair struct {
+	ThreadID            string `json:"threadId"`
+	RolloutPath         string `json:"rolloutPath"`
+	BackupPath          string `json:"backupPath"`
+	EndOrdinalExclusive int64  `json:"endOrdinalExclusive"`
+	OriginalSHA256      string `json:"originalSha256"`
+	UpdatedSHA256       string `json:"updatedSha256"`
+	OriginalByteOffset  int64  `json:"originalByteOffset"`
+	UpdatedByteOffset   int64  `json:"updatedByteOffset"`
+	Original            []byte `json:"-"`
+	Updated             []byte `json:"-"`
+}
+
+type codexProviderThreadRolloutRow struct {
+	ID          string `json:"id"`
+	RolloutPath string `json:"rollout_path"`
 }
 
 func migrateCodexThreadProvider(ctx context.Context, req codexProviderMigrationRequest) (codexProviderMigrationResult, error) {
@@ -141,6 +163,11 @@ func migrateCodexThreadProvider(ctx context.Context, req codexProviderMigrationR
 		return result, err
 	}
 	result.Transform = transformResult
+	lineageRepairs, err := prepareCodexPaginatedLineageRepairs(ctx, stateDB, req.CodexHome, req.ThreadID, transformed)
+	if err != nil {
+		return result, err
+	}
+	result.LineageRepairs = len(lineageRepairs)
 
 	catalogDB := filepath.Join(req.SQLiteHome, "sqlite", "codex-dev.db")
 	catalogRows, catalogAvailable, err := readCodexProviderCatalogRows(ctx, catalogDB, req.ThreadID)
@@ -162,20 +189,34 @@ func migrateCodexThreadProvider(ctx context.Context, req codexProviderMigrationR
 		Version: 1, Status: "prepared", ThreadID: req.ThreadID,
 		RolloutPath: stateRow.RolloutPath, OriginalSHA256: sha256Hex(original),
 		PreviousProvider: stateRow.ModelProvider, TargetProvider: req.TargetProvider,
-		CatalogRows: catalogRows, Transform: transformResult, UpdatedAt: time.Now().UTC(),
+		CatalogRows: catalogRows, Transform: transformResult, LineageRepairs: lineageRepairs,
+		UpdatedAt: time.Now().UTC(),
 	}
 	if err := securefile.Write(filepath.Join(backupDir, "rollout.jsonl"), original); err != nil {
 		return result, fmt.Errorf("备份 Codex rollout: %w", err)
+	}
+	for index := range manifest.LineageRepairs {
+		repair := &manifest.LineageRepairs[index]
+		repair.BackupPath = filepath.Join("lineage", repair.ThreadID+".jsonl")
+		backupPath := filepath.Join(backupDir, repair.BackupPath)
+		if err := securefile.Write(backupPath, repair.Original); err != nil {
+			return result, fmt.Errorf("备份 Codex paginated child rollout: %w", err)
+		}
 	}
 	if err := writeCodexProviderManifest(backupDir, &manifest, "prepared"); err != nil {
 		return result, err
 	}
 
 	rolloutWritten := false
+	lineageWritten := 0
 	stateUpdated := false
 	catalogUpdated := false
 	rollback := func(cause error) error {
 		var rollbackErrs []error
+		for index := lineageWritten - 1; index >= 0; index-- {
+			repair := manifest.LineageRepairs[index]
+			rollbackErrs = append(rollbackErrs, writeCodexProviderFileAtomically(repair.RolloutPath, repair.Original))
+		}
 		if catalogUpdated {
 			rollbackErrs = append(rollbackErrs, restoreCodexProviderCatalogRows(ctx, catalogDB, req.ThreadID, catalogRows))
 		}
@@ -202,6 +243,15 @@ func migrateCodexThreadProvider(ctx context.Context, req codexProviderMigrationR
 	}
 	rolloutWritten = true
 	if err := writeCodexProviderManifest(backupDir, &manifest, "rollout_written"); err != nil {
+		return result, rollback(err)
+	}
+	for _, repair := range manifest.LineageRepairs {
+		if err := writeCodexProviderFileAtomically(repair.RolloutPath, repair.Updated); err != nil {
+			return result, rollback(fmt.Errorf("写入 Codex paginated child lineage: %w", err))
+		}
+		lineageWritten++
+	}
+	if err := writeCodexProviderManifest(backupDir, &manifest, "lineage_written"); err != nil {
 		return result, rollback(err)
 	}
 	if err := updateCodexProviderStateRow(ctx, stateDB, req.ThreadID, req.TargetProvider); err != nil {
@@ -330,6 +380,230 @@ func transformCodexRolloutProvider(original []byte, threadID string, targetProvi
 		}
 	}
 	return output.Bytes(), result, nil
+}
+
+// codexRolloutOffsetAtOrAfterOrdinal returns the byte boundary before the first
+// record whose ordinal is at least ordinal. Deleted records therefore resolve
+// to the next surviving record, while a boundary after the rollout resolves to
+// the current file length.
+func codexRolloutOffsetAtOrAfterOrdinal(rollout []byte, ordinal int64) (int64, error) {
+	if ordinal < 0 {
+		return 0, fmt.Errorf("Codex rollout ordinal 无效: %d", ordinal)
+	}
+	reader := bufio.NewReader(bytes.NewReader(rollout))
+	var offset int64
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			trimmed := bytes.TrimSpace(line)
+			if len(trimmed) > 0 {
+				var record struct {
+					Ordinal *int64 `json:"ordinal"`
+				}
+				if unmarshalErr := json.Unmarshal(trimmed, &record); unmarshalErr != nil {
+					return 0, fmt.Errorf("解析 Codex rollout ordinal: %w", unmarshalErr)
+				}
+				if record.Ordinal != nil && *record.Ordinal >= ordinal {
+					return offset, nil
+				}
+			}
+			offset += int64(len(line))
+		}
+		if errors.Is(err, io.EOF) {
+			return int64(len(rollout)), nil
+		}
+		if err != nil {
+			return 0, fmt.Errorf("读取 Codex rollout ordinal: %w", err)
+		}
+	}
+}
+
+// rewriteCodexPaginatedLineageOffset updates only the numeric token in the
+// session_meta line. Padding a shorter value with JSON whitespace preserves the
+// child's byte layout, so any grandchildren referring to this rollout remain
+// valid without a second offset rewrite.
+func rewriteCodexPaginatedLineageOffset(
+	rollout []byte,
+	threadID string,
+	parentThreadID string,
+	endOrdinal int64,
+	newOffset int64,
+) ([]byte, int64, error) {
+	if !codexThreadIDPattern.MatchString(strings.TrimSpace(threadID)) ||
+		!codexThreadIDPattern.MatchString(strings.TrimSpace(parentThreadID)) ||
+		endOrdinal < 0 || newOffset < 0 {
+		return nil, 0, fmt.Errorf("Codex paginated lineage 参数无效")
+	}
+	lineEnd := bytes.IndexByte(rollout, '\n')
+	if lineEnd < 0 {
+		return nil, 0, fmt.Errorf("Codex paginated rollout 缺少 session_meta 换行")
+	}
+	var meta struct {
+		Type    string `json:"type"`
+		Payload struct {
+			ID          string `json:"id"`
+			HistoryBase struct {
+				ThreadID            string `json:"thread_id"`
+				EndOrdinalExclusive int64  `json:"end_ordinal_exclusive"`
+				EndByteOffset       int64  `json:"end_byte_offset"`
+			} `json:"history_base"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(rollout[:lineEnd]), &meta); err != nil {
+		return nil, 0, fmt.Errorf("解析 Codex paginated session_meta: %w", err)
+	}
+	if meta.Type != "session_meta" || meta.Payload.ID != threadID {
+		return nil, 0, fmt.Errorf("Codex paginated session_meta 与目标 thread 不一致")
+	}
+	if meta.Payload.HistoryBase.ThreadID != parentThreadID ||
+		meta.Payload.HistoryBase.EndOrdinalExclusive != endOrdinal {
+		return nil, 0, fmt.Errorf("Codex paginated lineage 边界与目标 parent 不一致")
+	}
+	matches := codexHistoryEndByteOffsetPattern.FindAllIndex(rollout[:lineEnd], -1)
+	if len(matches) != 1 {
+		return nil, 0, fmt.Errorf("Codex paginated session_meta 的 end_byte_offset 不唯一")
+	}
+	match := matches[0]
+	valueStart := match[0]
+	for valueStart < match[1] && rollout[valueStart] != ':' {
+		valueStart++
+	}
+	for valueStart < match[1] && (rollout[valueStart] == ':' || rollout[valueStart] == ' ' || rollout[valueStart] == '\t') {
+		valueStart++
+	}
+	valueEnd := valueStart
+	for valueEnd < match[1] && rollout[valueEnd] >= '0' && rollout[valueEnd] <= '9' {
+		valueEnd++
+	}
+	if valueStart == valueEnd {
+		return nil, 0, fmt.Errorf("Codex paginated session_meta 的 end_byte_offset 无效")
+	}
+	oldOffset := meta.Payload.HistoryBase.EndByteOffset
+	if string(rollout[valueStart:valueEnd]) != fmt.Sprintf("%d", oldOffset) {
+		return nil, 0, fmt.Errorf("Codex paginated lineage 原始偏移不一致")
+	}
+	newValue := fmt.Sprintf("%d", newOffset)
+	if len(newValue) > valueEnd-valueStart {
+		return nil, 0, fmt.Errorf("Codex paginated lineage 新偏移长度超过原字段")
+	}
+	updated := append([]byte(nil), rollout...)
+	copy(updated[valueStart:valueEnd], newValue)
+	for index := valueStart + len(newValue); index < valueEnd; index++ {
+		updated[index] = ' '
+	}
+	return updated, oldOffset, nil
+}
+
+type codexPaginatedHistoryBase struct {
+	ThreadID            string `json:"thread_id"`
+	EndOrdinalExclusive int64  `json:"end_ordinal_exclusive"`
+	EndByteOffset       int64  `json:"end_byte_offset"`
+}
+
+type codexPaginatedSessionMeta struct {
+	Type    string `json:"type"`
+	Payload struct {
+		ID          string                     `json:"id"`
+		HistoryMode string                     `json:"history_mode"`
+		HistoryBase *codexPaginatedHistoryBase `json:"history_base"`
+	} `json:"payload"`
+}
+
+func prepareCodexPaginatedLineageRepairs(
+	ctx context.Context,
+	stateDB string,
+	codexHome string,
+	parentThreadID string,
+	transformed []byte,
+) ([]codexProviderLineageRepair, error) {
+	var rows []codexProviderThreadRolloutRow
+	if err := runCodexProviderSQLiteJSON(ctx, stateDB, map[string]string{"@thread": parentThreadID},
+		"SELECT id, rollout_path FROM threads WHERE id<>@thread AND rollout_path<>'' ORDER BY id;", &rows); err != nil {
+		return nil, fmt.Errorf("读取 Codex paginated child rollouts: %w", err)
+	}
+	repairs := make([]codexProviderLineageRepair, 0)
+	seenPaths := make(map[string]bool)
+	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !codexThreadIDPattern.MatchString(strings.TrimSpace(row.ID)) {
+			continue
+		}
+		path := filepath.Clean(strings.TrimSpace(row.RolloutPath))
+		if path == "." || !filepath.IsAbs(path) || !codexProviderPathWithinHome(codexHome, path) {
+			continue
+		}
+		if seenPaths[path] {
+			continue
+		}
+		seenPaths[path] = true
+		if err := validateCodexProviderRolloutPath(codexHome, path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			continue
+		}
+		prefix, err := readCodexRolloutPrefix(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("读取 Codex paginated child session_meta: %w", err)
+		}
+		var meta codexPaginatedSessionMeta
+		if err := json.Unmarshal(bytes.TrimSpace(prefix), &meta); err != nil || meta.Type != "session_meta" || meta.Payload.ID != row.ID || meta.Payload.HistoryBase == nil {
+			continue
+		}
+		base := meta.Payload.HistoryBase
+		if base.ThreadID != parentThreadID || (meta.Payload.HistoryMode != "" && meta.Payload.HistoryMode != "paginated") {
+			continue
+		}
+		newOffset, err := codexRolloutOffsetAtOrAfterOrdinal(transformed, base.EndOrdinalExclusive)
+		if err != nil {
+			return nil, fmt.Errorf("计算 Codex paginated lineage 偏移: %w", err)
+		}
+		if newOffset == base.EndByteOffset {
+			continue
+		}
+		original, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("读取 Codex paginated child rollout: %w", err)
+		}
+		updated, oldOffset, err := rewriteCodexPaginatedLineageOffset(original, row.ID, parentThreadID, base.EndOrdinalExclusive, newOffset)
+		if err != nil {
+			return nil, fmt.Errorf("修复 Codex paginated child lineage %q: %w", row.ID, err)
+		}
+		repairs = append(repairs, codexProviderLineageRepair{
+			ThreadID: row.ID, RolloutPath: path, EndOrdinalExclusive: base.EndOrdinalExclusive,
+			OriginalSHA256: sha256Hex(original), UpdatedSHA256: sha256Hex(updated),
+			OriginalByteOffset: oldOffset, UpdatedByteOffset: newOffset,
+			Original: original, Updated: updated,
+		})
+	}
+	return repairs, nil
+}
+
+func codexProviderPathWithinHome(codexHome string, path string) bool {
+	relative, err := filepath.Rel(codexHome, path)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func readCodexRolloutPrefix(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	reader := bufio.NewReaderSize(file, 16*1024*1024)
+	line, err := reader.ReadBytes('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(line)) == 0 {
+		return nil, fmt.Errorf("Codex rollout 首行为空")
+	}
+	return line, nil
 }
 
 func containsCodexEncryptedContent(value any) bool {

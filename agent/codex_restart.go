@@ -59,8 +59,10 @@ func CodexDesktopFrontendPresence() (socketExists bool, processExists bool) {
 }
 
 // PrepareCodexRestart proves global idleness and stops the verified shared
-// Host. The app-server gate intentionally remains failed-closed until either
-// the service exits or CancelCodexRestart reconstructs the Host.
+// Host. A failed app-server gate stays closed for ordinary operations; an
+// explicit force may enter the termination transaction, while any incomplete
+// force attempt keeps the gate failed until the service exits or
+// CancelCodexRestart reconstructs the Host.
 func (a *ACPAgent) PrepareCodexRestart(
 	ctx context.Context,
 	persistIntent func(CodexRestartSnapshot) error,

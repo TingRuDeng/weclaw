@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -87,6 +88,62 @@ func TestTransformCodexRolloutProviderSanitizesCompactedReplacementHistory(t *te
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("transformed rollout contains %q:\n%s", forbidden, text)
 		}
+	}
+}
+
+func TestRewriteCodexPaginatedLineageOffsetPreservesRolloutBytes(t *testing.T) {
+	original := []byte(`{"type":"session_meta","payload":{"id":"child","history_base":{"thread_id":"parent","end_ordinal_exclusive":42,"end_byte_offset":106633200}}}` + "\n" +
+		`{"ordinal":42,"type":"event_msg","payload":{"type":"task_started"}}` + "\n")
+
+	updated, oldOffset, err := rewriteCodexPaginatedLineageOffset(original, "child", "parent", 42, 99735823)
+	if err != nil {
+		t.Fatalf("rewriteCodexPaginatedLineageOffset() error = %v", err)
+	}
+	if oldOffset != 106633200 {
+		t.Fatalf("old offset = %d, want 106633200", oldOffset)
+	}
+	if len(updated) != len(original) {
+		t.Fatalf("updated length = %d, original length = %d", len(updated), len(original))
+	}
+	if string(updated[bytes.IndexByte(updated, '\n')+1:]) != string(original[bytes.IndexByte(original, '\n')+1:]) {
+		t.Fatal("rewrite changed bytes after session_meta")
+	}
+	var record struct {
+		Payload struct {
+			HistoryBase struct {
+				EndByteOffset int64 `json:"end_byte_offset"`
+			} `json:"history_base"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(updated[:bytes.IndexByte(updated, '\n')], &record); err != nil {
+		t.Fatalf("updated session_meta is invalid JSON: %v", err)
+	}
+	if got := record.Payload.HistoryBase.EndByteOffset; got != 99735823 {
+		t.Fatalf("updated offset = %d, want 99735823", got)
+	}
+}
+
+func TestCodexRolloutOffsetAtOrAfterOrdinal(t *testing.T) {
+	rollout := []byte(`{"ordinal":10,"type":"event_msg","payload":{}}` + "\n" +
+		`{"ordinal":12,"type":"event_msg","payload":{}}` + "\n")
+	for _, test := range []struct {
+		name    string
+		ordinal int64
+		want    int64
+	}{
+		{name: "exact", ordinal: 12, want: 47},
+		{name: "deleted boundary", ordinal: 11, want: 47},
+		{name: "end", ordinal: 13, want: int64(len(rollout))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := codexRolloutOffsetAtOrAfterOrdinal(rollout, test.ordinal)
+			if err != nil {
+				t.Fatalf("codexRolloutOffsetAtOrAfterOrdinal() error = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("offset = %d, want %d", got, test.want)
+			}
+		})
 	}
 }
 
@@ -197,6 +254,80 @@ INSERT INTO local_thread_catalog VALUES ('host-a', '`+otherID+`', 'other');`)
 	manifestData, err := os.ReadFile(filepath.Join(result.BackupDir, "manifest.json"))
 	if err != nil || !strings.Contains(string(manifestData), `"status": "verified"`) {
 		t.Fatalf("manifest = %s, err = %v", manifestData, err)
+	}
+}
+
+func TestMigrateCodexThreadProviderRepairsPaginatedChildLineage(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 not installed")
+	}
+	codexHome := t.TempDir()
+	if err := os.Chmod(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parentID := "019fe000-1111-7222-8333-444444444444"
+	childID := "019fe000-5555-7222-8333-444444444444"
+	parentPath := filepath.Join(codexHome, "archived_sessions", "rollout-parent.jsonl")
+	childPath := filepath.Join(codexHome, "sessions", "2026", "08", "09", "rollout-child.jsonl")
+	if err := os.MkdirAll(filepath.Dir(parentPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(childPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parentOriginal := []byte(`{"ordinal":0,"type":"session_meta","payload":{"id":"` + parentID + `","model_provider":"relay"}}` + "\n" +
+		`{"ordinal":42,"type":"event_msg","payload":{"type":"task_started"}}` + "\n")
+	if err := os.WriteFile(parentPath, parentOriginal, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	childOriginal := []byte(`{"ordinal":0,"type":"session_meta","payload":{"id":"` + childID + `","history_mode":"paginated","history_base":{"thread_id":"` + parentID + `","end_ordinal_exclusive":42,"end_byte_offset":999}}}` + "\n" +
+		`{"ordinal":42,"type":"event_msg","payload":{"type":"child_started"}}` + "\n")
+	if err := os.WriteFile(childPath, childOriginal, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateDB := filepath.Join(codexHome, "state_5.sqlite")
+	runSQLiteFixture(t, stateDB, `
+CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, model_provider TEXT NOT NULL, history_mode TEXT NOT NULL);
+INSERT INTO threads VALUES ('`+parentID+`', '`+parentPath+`', 'relay', 'paginated');
+INSERT INTO threads VALUES ('`+childID+`', '`+childPath+`', 'relay', 'paginated');`)
+
+	result, err := migrateCodexThreadProvider(context.Background(), codexProviderMigrationRequest{
+		CodexHome: codexHome, ThreadID: parentID, TargetProvider: "openai",
+	})
+	if err != nil {
+		t.Fatalf("migrateCodexThreadProvider() error = %v", err)
+	}
+	transformedParent, err := os.ReadFile(parentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOffset, err := codexRolloutOffsetAtOrAfterOrdinal(transformedParent, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedChild, err := os.ReadFile(childPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updatedChild) != len(childOriginal) {
+		t.Fatalf("updated child length = %d, original length = %d", len(updatedChild), len(childOriginal))
+	}
+	var childMeta struct {
+		Payload struct {
+			HistoryBase struct {
+				EndByteOffset int64 `json:"end_byte_offset"`
+			} `json:"history_base"`
+		} `json:"payload"`
+	}
+	lineEnd := bytes.IndexByte(updatedChild, '\n')
+	if err := json.Unmarshal(updatedChild[:lineEnd], &childMeta); err != nil {
+		t.Fatalf("updated child session_meta invalid: %v", err)
+	}
+	if childMeta.Payload.HistoryBase.EndByteOffset != wantOffset {
+		t.Fatalf("child cutoff = %d, want %d", childMeta.Payload.HistoryBase.EndByteOffset, wantOffset)
+	}
+	if len(result.BackupDir) == 0 {
+		t.Fatal("migration did not create backup")
 	}
 }
 

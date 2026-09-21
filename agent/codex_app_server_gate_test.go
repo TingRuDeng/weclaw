@@ -110,6 +110,23 @@ func TestCodexAppServerGateExclusiveIsNonWaitingAndCanFailClosed(t *testing.T) {
 	}
 }
 
+func TestCodexAppServerGateForcedExclusiveRecoversFailedStateWithoutReopeningIt(t *testing.T) {
+	gate := newCodexAppServerGate()
+	gate.fail(errors.New("runtime lost"))
+
+	if err := gate.beginForcedExclusive(); err != nil {
+		t.Fatalf("beginForcedExclusive() error=%v, explicit force should enter recovery", err)
+	}
+	if state := gate.stateSnapshot(); state != codexAppServerDraining {
+		t.Fatalf("state=%s, want draining during forced recovery", state)
+	}
+
+	gate.finishExclusive(false, true)
+	if state := gate.stateSnapshot(); state != codexAppServerFailed {
+		t.Fatalf("state=%s, failed runtime must remain fail-closed after an unsuccessful force", state)
+	}
+}
+
 func TestCodexAppServerGateIgnoresUnsafeCodexHomeUntilAccountIndexExists(t *testing.T) {
 	weclawHome := t.TempDir()
 	codexHome := filepath.Join(t.TempDir(), "codex")
