@@ -2900,6 +2900,58 @@ func TestTerminalOutboxStartsResultDeliveryWhileCheckpointIsBlocked(t *testing.T
 	}
 }
 
+func TestTerminalOutboxOrdersFeishuRichResultAfterCheckpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	checkpointStarted := make(chan struct{})
+	releaseCheckpoint := make(chan struct{})
+	reply.beforeCheckpoint = func() {
+		close(checkpointStarted)
+		<-releaseCheckpoint
+	}
+	reply.textDelivered = make(chan string, 1)
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := &platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: json.RawMessage(`{"card_id":"card-1"}`)}
+	entry, err := outbox.enqueue(terminalOutboxDraft{
+		Route: route, Checkpoint: checkpoint, RichResult: true, ResultTitle: "Codex", Text: "完整最终结果",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- outbox.attempt(context.Background(), entry.ID, reply)
+	}()
+	select {
+	case <-checkpointStarted:
+	case <-time.After(time.Second):
+		close(releaseCheckpoint)
+		t.Fatal("checkpoint delivery did not start")
+	}
+	select {
+	case text := <-reply.textDelivered:
+		close(releaseCheckpoint)
+		t.Fatalf("rich result delivered before progress checkpoint: %q", text)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(releaseCheckpoint)
+	if err := <-done; err != nil {
+		t.Fatalf("attempt: %v", err)
+	}
+	select {
+	case text := <-reply.textDelivered:
+		if text != "完整最终结果" {
+			t.Fatalf("result=%q", text)
+		}
+	default:
+		t.Fatal("rich result was not delivered after checkpoint")
+	}
+}
+
 func TestTerminalOutboxPreservesTraceAcrossDurableDelivery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.json")
 	route := platform.DeliveryRoute{Platform: platform.PlatformWeChat, AccountID: "bot-1", ChatID: "wx-user"}

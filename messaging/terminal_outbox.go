@@ -1816,6 +1816,11 @@ func (o *terminalOutbox) attempt(parent context.Context, id string, preferred pl
 	}
 	results := make(chan stageResult, 3)
 	stageCount := 0
+	// 飞书的独立结果卡必须排在进度卡终态更新之后。两者并发投递时，
+	// 结果卡可能先到达会话，用户会看到最终结果出现在进度卡前面。
+	waitForCheckpoint := entry.Route.Platform == platform.PlatformFeishu &&
+		entry.RichResult && entry.Checkpoint != nil && !entry.CheckpointDelivered
+	checkpointDone := make(chan struct{})
 	startStage := func(stage terminalOutboxStage, deliver func(context.Context, platform.Replier) error) {
 		stageCount++
 		go func() {
@@ -1836,6 +1841,9 @@ func (o *terminalOutbox) attempt(parent context.Context, id string, preferred pl
 				if err == nil {
 					err = o.markDelivered(id, stage)
 				}
+			}
+			if stage == terminalOutboxCheckpointStage {
+				close(checkpointDone)
 			}
 			results <- stageResult{stage: stage, err: err}
 		}()
@@ -1861,6 +1869,9 @@ func (o *terminalOutbox) attempt(parent context.Context, id string, preferred pl
 			resultKey = terminalOutboxIdempotencyKey(entry, "result")
 		}
 		startStage(terminalOutboxTextStage, func(ctx context.Context, reply platform.Replier) error {
+			if waitForCheckpoint {
+				<-checkpointDone
+			}
 			return sendOutboxResult(ctx, reply, entry, text, resultKey)
 		})
 	}
