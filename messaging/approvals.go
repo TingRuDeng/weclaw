@@ -164,6 +164,46 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 
 func (h *Handler) waitForPendingApproval(ctx context.Context, opts agentInteractionContextOptions, req agent.ApprovalRequest, pending *pendingApproval) (string, error) {
 	resolutionDone := codexInteractionResolutionDone(req.Resolution)
+	var stateProbeTicker *time.Ticker
+	var stateProbeC <-chan time.Time
+	if pending.stateProbe != nil {
+		stateProbeTicker = time.NewTicker(pendingApprovalStateProbeInterval)
+		stateProbeC = stateProbeTicker.C
+		defer stateProbeTicker.Stop()
+	}
+	probeUnavailableRecorded := false
+	reviewState := func() (bool, error) {
+		state, err := pending.stateProbe(ctx)
+		switch {
+		case err != nil || state == agent.ApprovalRequestStateUnknown:
+			pending.renewDeadline()
+			if !probeUnavailableRecorded {
+				probeUnavailableRecorded = true
+				h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_state_review_failed", Summary: "decision=pending reason=state_unavailable"})
+			}
+			return false, nil
+		case state == agent.ApprovalRequestStatePending:
+			pending.renewDeadline()
+			probeUnavailableRecorded = false
+			return false, nil
+		case state == agent.ApprovalRequestStateResolvedExternally:
+			if pending.resolved.CompareAndSwap(false, true) {
+				h.recordPendingApprovalStateAsync(ctx, pending, state, opts.actorUserID)
+				h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_resolved_externally", Summary: "decision=handled_elsewhere"})
+				log.Printf("[handler] approval resolved externally via state probe key=%s actor=%s", pending.key, opts.actorUserID)
+			}
+			return true, agent.ErrApprovalResolvedExternally
+		case state == agent.ApprovalRequestStateTurnTerminal:
+			if pending.resolved.CompareAndSwap(false, true) {
+				h.recordPendingApprovalStateAsync(ctx, pending, state, opts.actorUserID)
+				h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_turn_terminal", Summary: "decision=not_sent"})
+			}
+			return true, agent.ErrApprovalTurnTerminal
+		default:
+			pending.renewDeadline()
+			return false, nil
+		}
+	}
 	for {
 		wait := time.Until(pending.deadline())
 		if wait < 0 {
@@ -188,6 +228,11 @@ func (h *Handler) waitForPendingApproval(ctx context.Context, opts agentInteract
 		case <-resolutionDone:
 			timer.Stop()
 			return "", codexInteractionResolutionError(req.Resolution)
+		case <-stateProbeC:
+			timer.Stop()
+			if done, err := reviewState(); done {
+				return "", err
+			}
 		case <-timer.C:
 			if pending.stateProbe == nil {
 				if !pending.resolved.CompareAndSwap(false, true) {
@@ -198,30 +243,8 @@ func (h *Handler) waitForPendingApproval(ctx context.Context, opts agentInteract
 				h.recordApprovalTimeoutAsync(ctx, opts, pending)
 				return defaultDenyApprovalOption(req.Options), nil
 			}
-			state, err := pending.stateProbe(ctx)
-			switch {
-			case err != nil || state == agent.ApprovalRequestStateUnknown:
-				pending.renewDeadline()
-				h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_state_review_failed", Summary: "decision=pending reason=state_unavailable"})
-				continue
-			case state == agent.ApprovalRequestStatePending:
-				pending.renewDeadline()
-				h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_state_reviewed", Summary: "decision=pending"})
-				continue
-			case state == agent.ApprovalRequestStateResolvedExternally:
-				if pending.resolved.CompareAndSwap(false, true) {
-					h.recordPendingApprovalStateAsync(ctx, pending, state, opts.actorUserID)
-					h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_resolved_externally", Summary: "decision=handled_elsewhere"})
-				}
-				return "", agent.ErrApprovalResolvedExternally
-			case state == agent.ApprovalRequestStateTurnTerminal:
-				if pending.resolved.CompareAndSwap(false, true) {
-					h.recordPendingApprovalStateAsync(ctx, pending, state, opts.actorUserID)
-					h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_turn_terminal", Summary: "decision=not_sent"})
-				}
-				return "", agent.ErrApprovalTurnTerminal
-			default:
-				pending.renewDeadline()
+			if done, err := reviewState(); done {
+				return "", err
 			}
 		case <-opts.lease.done():
 			timer.Stop()

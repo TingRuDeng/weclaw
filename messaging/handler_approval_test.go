@@ -106,6 +106,41 @@ func TestDesktopApprovalReviewKeepsPendingRequestWithoutDefaultDeny(t *testing.T
 	resolveApprovalForTest(t, ctx, h, reply, approvalKeyFromChoices(request.choices), "accept", result, "accept")
 }
 
+func TestDesktopApprovalReviewPollsExternalResolutionWhileWaiting(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newBlockingChoiceRequestCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	var probes atomic.Int32
+	result := startApprovalForTest(ctx, h, reply, agent.ApprovalRequest{
+		RequestID: "request-1", ToolCall: json.RawMessage(`{"cmd":"pwd"}`),
+		Options: []agent.ApprovalOption{
+			{ID: "accept", Name: "允许", Kind: "allow"},
+			{ID: "decline", Name: "拒绝", Kind: "deny"},
+		},
+		StateProbe: func(context.Context) (agent.ApprovalRequestState, error) {
+			if probes.Add(1) == 1 {
+				return agent.ApprovalRequestStatePending, nil
+			}
+			return agent.ApprovalRequestStateResolvedExternally, nil
+		},
+	})
+	reply.waitChoiceRequest(t, ctx)
+	close(reply.release)
+
+	select {
+	case got := <-result:
+		if !strings.Contains(got, agent.ErrApprovalResolvedExternally.Error()) {
+			t.Fatalf("approval result=%q, want external resolution", got)
+		}
+	case <-ctx.Done():
+		t.Fatalf("approval did not settle from periodic state probe: %v", ctx.Err())
+	}
+	if probes.Load() < 2 {
+		t.Fatalf("state probes=%d, want an initial pending probe and a later resolution probe", probes.Load())
+	}
+}
+
 func TestDesktopApprovalReviewSettlesExternalResolutionAndUpdatesDisplay(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := newBlockingApprovalStateCaptureReplier()

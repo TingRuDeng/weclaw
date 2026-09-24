@@ -159,7 +159,10 @@ func (h *Handler) SetTraceRecorder(recorder observability.Recorder) {
 const (
 	pendingCodexPreviewRunes = 120
 	pendingApprovalTimeout   = 5 * time.Minute
-	feishuSessionMetadataKey = "feishu_session_key"
+	// 状态探测是实时通知丢失时的补偿路径；保持短间隔可让另一前端的
+	// 审批在飞书卡片上快速收敛，同时避免每个待审批请求持续高频刷新。
+	pendingApprovalStateProbeInterval = 2 * time.Second
+	feishuSessionMetadataKey          = "feishu_session_key"
 )
 
 var ansiEscapePattern = regexp.MustCompile(`\x1B\[[0-?]*[ -/]*[@-~]`)

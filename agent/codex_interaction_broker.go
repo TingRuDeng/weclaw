@@ -238,7 +238,8 @@ func (a *ACPAgent) handleCodexServerRequestResolved(params json.RawMessage) {
 		log.Printf("[acp] ignoring serverRequest/resolved without thread or request identity")
 		return
 	}
-	a.resolveCodexInteractionRequest(threadID, requestID, ErrCodexInteractionResolvedExternally)
+	matched := a.resolveCodexInteractionRequest(threadID, requestID, ErrCodexInteractionResolvedExternally)
+	log.Printf("[acp] serverRequest/resolved thread=%s request=%s matched=%d", threadID, requestID, matched)
 }
 
 func codexServerRequestID(raw json.RawMessage) string {
@@ -253,20 +254,22 @@ func codexServerRequestID(raw json.RawMessage) string {
 	return ""
 }
 
-func (a *ACPAgent) resolveCodexInteractionRequest(threadID string, requestID string, err error) {
+func (a *ACPAgent) resolveCodexInteractionRequest(threadID string, requestID string, err error) int {
 	threadID = strings.TrimSpace(threadID)
 	requestID = strings.TrimSpace(requestID)
 	if threadID == "" || requestID == "" {
-		return
+		return 0
 	}
 
 	a.notifyMu.Lock()
 	pending := a.pendingTurnInteractions[threadID]
 	brokers := make(map[*codexInteractionBroker]struct{})
+	matched := 0
 	for key, event := range pending {
 		if codexInteractionID(event) != requestID {
 			continue
 		}
+		matched++
 		if event != nil && event.interactionBroker != nil {
 			brokers[event.interactionBroker] = struct{}{}
 		}
@@ -277,6 +280,7 @@ func (a *ACPAgent) resolveCodexInteractionRequest(threadID string, requestID str
 	for broker := range brokers {
 		broker.resolve(err)
 	}
+	return matched
 }
 
 func (a *ACPAgent) forgetCodexInteractionLocked(threadID string, key string, event *codexTurnEvent) {
