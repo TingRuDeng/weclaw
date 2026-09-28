@@ -97,7 +97,7 @@ func (s *sdkMessageSender) imageMessageContent(ctx context.Context, guideTarget 
 	}
 	if !imageResp.Success() || imageResp.Data == nil || imageResp.Data.ImageKey == nil {
 		if guideTarget != "" {
-			s.sendPermissionGuide(ctx, guideTarget, imageResp.Code)
+			s.sendPermissionGuide(ctx, guideTarget, imageResp.Code, imageResp.Msg)
 		}
 		return "", s.apiError(imageResp.Code, imageResp.Msg)
 	}
@@ -146,7 +146,7 @@ func (s *sdkMessageSender) fileMessageContent(ctx context.Context, guideTarget s
 	}
 	if !fileResp.Success() || fileResp.Data == nil || fileResp.Data.FileKey == nil {
 		if guideTarget != "" {
-			s.sendPermissionGuide(ctx, guideTarget, fileResp.Code)
+			s.sendPermissionGuide(ctx, guideTarget, fileResp.Code, fileResp.Msg)
 		}
 		return "", s.apiError(fileResp.Code, fileResp.Msg)
 	}
@@ -210,7 +210,7 @@ func (s *sdkMessageSender) createMessageWithUUID(ctx context.Context, receiveID 
 		return err
 	}
 	if code != 0 {
-		s.sendPermissionGuide(ctx, receiveID, code)
+		s.sendPermissionGuide(ctx, receiveID, code, msg)
 		return s.apiError(code, msg)
 	}
 	return nil
@@ -257,8 +257,8 @@ func feishuReceiveIDType(receiveID string) string {
 	return larkim.CreateMessageV1ReceiveIDTypeOpenId
 }
 
-func (s *sdkMessageSender) sendPermissionGuide(ctx context.Context, openID string, code int) {
-	guide, ok := s.guide.MessageForCode(code)
+func (s *sdkMessageSender) sendPermissionGuide(ctx context.Context, openID string, code int, msg string) {
+	guide, ok := s.guide.MessageForError(code, msg)
 	if !ok {
 		return
 	}

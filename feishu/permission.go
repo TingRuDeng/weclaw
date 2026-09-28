@@ -15,10 +15,19 @@ const permissionGuideCooldown = 60 * time.Second
 var permissionErrorCodes = map[int]struct{}{
 	99991400: {},
 	99991401: {},
-	99991663: {},
 	99991672: {},
 	99991670: {},
 	99991668: {},
+}
+
+const feishuInvalidAccessTokenCode = 99991663
+
+var authenticationErrorTextMarkers = []string{
+	"invalid access token",
+	"token attached",
+	"authentication failed",
+	"认证失败",
+	"凭证失效",
 }
 
 var permissionErrorTextMarkers = []string{
@@ -53,15 +62,45 @@ func IsPermissionErrorCode(code int) bool {
 	return ok
 }
 
+// IsAuthenticationError 判断飞书凭证失效错误，避免误显示权限开通引导。
+func IsAuthenticationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	code, hasCode := feishuErrorCode(err)
+	if hasCode && code != feishuInvalidAccessTokenCode {
+		return false
+	}
+	lower := strings.ToLower(feishuErrorMessage(err))
+	if hasCode && code == feishuInvalidAccessTokenCode {
+		for _, marker := range authenticationErrorTextMarkers {
+			if strings.Contains(lower, strings.ToLower(marker)) {
+				return true
+			}
+		}
+	}
+	for _, marker := range authenticationErrorTextMarkers {
+		if strings.Contains(lower, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsPermissionError 统一判断飞书错误是否为权限不足，供发送、CardKit 和校验路径复用。
 func IsPermissionError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if code, ok := feishuErrorCode(err); ok {
-		return IsPermissionErrorCode(code)
+	if IsAuthenticationError(err) {
+		return false
 	}
-	lower := strings.ToLower(err.Error())
+	if code, ok := feishuErrorCode(err); ok {
+		if IsPermissionErrorCode(code) {
+			return true
+		}
+	}
+	lower := strings.ToLower(feishuErrorMessage(err))
 	for _, marker := range permissionErrorTextMarkers {
 		if strings.Contains(lower, strings.ToLower(marker)) {
 			return true
@@ -174,7 +213,13 @@ func newPermissionGuideLimiter(appID string) *permissionGuideLimiter {
 
 // MessageForCode 在权限错误且冷却已过时返回引导文案。
 func (l *permissionGuideLimiter) MessageForCode(code int) (string, bool) {
-	if !IsPermissionError(formatFeishuAPIError(l.appID, code, "")) {
+	return l.MessageForError(code, "")
+}
+
+// MessageForError 根据错误码和消息判断是否应发送权限引导。
+func (l *permissionGuideLimiter) MessageForError(code int, msg string) (string, bool) {
+	err := formatFeishuAPIError(l.appID, code, msg)
+	if IsAuthenticationError(err) || !IsPermissionError(err) {
 		return "", false
 	}
 	l.mu.Lock()
@@ -207,6 +252,14 @@ func feishuErrorCode(err error) (int, bool) {
 		return apiErr.code, true
 	}
 	return 0, false
+}
+
+func feishuErrorMessage(err error) string {
+	var apiErr *feishuAPIError
+	if errors.As(err, &apiErr) {
+		return apiErr.msg
+	}
+	return err.Error()
 }
 
 // formatFeishuAPIError 生成不包含 app_secret 的飞书 API 错误。

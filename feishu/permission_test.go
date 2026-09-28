@@ -9,10 +9,21 @@ import (
 )
 
 func TestIsPermissionErrorCodeCoversKnownFeishuPermissionCodes(t *testing.T) {
-	for _, code := range []int{99991400, 99991401, 99991663, 99991672, 99991670, 99991668} {
+	for _, code := range []int{99991400, 99991401, 99991672, 99991670, 99991668} {
 		if !IsPermissionErrorCode(code) {
 			t.Fatalf("code=%d should be treated as permission error", code)
 		}
+	}
+}
+
+func TestInvalidAccessTokenIsAuthenticationErrorInsteadOfPermissionError(t *testing.T) {
+	err := formatFeishuAPIError("cli_a", 99991663, "Invalid access token for authorization. Please make a request with token attached.")
+
+	if !IsAuthenticationError(err) {
+		t.Fatalf("IsAuthenticationError(%v)=false, want true", err)
+	}
+	if IsPermissionError(err) {
+		t.Fatalf("IsPermissionError(%v)=true, want false", err)
 	}
 }
 
@@ -30,7 +41,7 @@ func TestIsPermissionErrorUsesCodeAndTextFallback(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{name: "known code", err: formatFeishuAPIError("cli_a", 99991663, "missing scope"), want: true},
+		{name: "scope message", err: formatFeishuAPIError("cli_a", 99991663, "missing scope"), want: true},
 		{name: "non permission code", err: formatFeishuAPIError("cli_a", 200400, "bad request"), want: false},
 		{name: "english fallback", err: errors.New("forbidden: no access to scope im:resource"), want: true},
 		{name: "chinese fallback", err: errors.New("权限不足，请开通权限"), want: true},

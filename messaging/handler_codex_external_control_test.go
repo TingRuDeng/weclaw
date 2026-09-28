@@ -71,6 +71,29 @@ func TestCodexExternalAppTaskUsesFeishuAccountProgress(t *testing.T) {
 	}
 }
 
+func TestCodexExternalTaskKeepsWatchingWhenProgressCardCannotOpen(t *testing.T) {
+	fixture := newFeishuExternalProgressFixture(t)
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	fixture.h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
+		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_a"): cfg,
+	})
+	fixture.reply.OpenStreamErr = errors.New("progress stream unavailable")
+
+	fixture.h.HandlePlatformMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "/cx cd weclaw",
+	}, "ou_user"), fixture.reply)
+	close(fixture.watchDone)
+	waitUntil(t, func() bool {
+		_, active := fixture.h.activeTask(buildCodexConversationID("ou_user", "codex", fixture.workspace))
+		return !active
+	})
+	if !containsText(fixture.reply.Texts, "本地任务完成") {
+		t.Fatalf("texts=%#v, want final text even when progress card opening fails", fixture.reply.Texts)
+	}
+}
+
 func TestCodexSwitchHidesAppThreadStateReadError(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()

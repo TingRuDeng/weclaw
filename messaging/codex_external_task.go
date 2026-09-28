@@ -285,10 +285,11 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	defer runtime.task.detachProgressSession(progressSession)
 	if progressSession != nil {
 		if err := progressSession.nativeProgressReadyError(); err != nil {
-			runtime.control.finishReady(err)
-			_ = finishProgress("", false)
-			h.finishActiveTask(runtime.opts.conversationID, runtime.task)
-			return
+			runtime.control.setProgressError(err)
+			trace := runtime.task.traceSnapshot()
+			h.recordTraceStage(trace, "task.progress_sync_degraded", "degraded", err.Error())
+			log.Printf("[codex-follower] 进度同步已降级，继续等待共享任务终态 thread=%q turn=%q: %v",
+				runtime.opts.threadID, runtime.state.ActiveTurnID, err)
 		}
 	}
 	runtime.task.mu.Lock()

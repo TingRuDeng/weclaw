@@ -818,8 +818,8 @@ func TestAcquireCodexSessionCardFailureKeepsBindingWritableAndMarksSyncDegraded(
 		t.Fatalf("text=%q, want writable binding with degraded synchronization", text)
 	}
 	snapshot := f.h.ensureCodexSessions().followerSnapshots()[0]
-	if snapshot.AttachPhase != codexFollowerAttachPreparing {
-		t.Fatalf("card failure follower=%#v, want preparing", snapshot)
+	if snapshot.AttachPhase != codexFollowerAttachReady {
+		t.Fatalf("card failure follower=%#v, want ready observer with degraded progress synchronization", snapshot)
 	}
 }
 

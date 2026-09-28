@@ -50,6 +50,24 @@ func TestSDKMessageSenderFallsBackToTextPermissionGuide(t *testing.T) {
 	}
 }
 
+func TestSDKMessageSenderDoesNotSendPermissionGuideForInvalidAccessToken(t *testing.T) {
+	sender := newTestSDKMessageSender("cli_a", []createMessageResult{
+		{code: 99991663, msg: "Invalid access token for authorization. Please make a request with token attached."},
+	})
+
+	err := sender.SendText(context.Background(), "ou_user", "hello")
+
+	if !IsAuthenticationError(err) {
+		t.Fatalf("SendText error=%v, want authentication error", err)
+	}
+	if IsPermissionError(err) {
+		t.Fatalf("SendText error=%v, want non-permission error", err)
+	}
+	if len(sender.calls) != 1 {
+		t.Fatalf("calls=%#v, want only the original failed request", sender.calls)
+	}
+}
+
 func TestSDKMessageSenderPermissionGuideLimiterSuppressesRepeatedGuide(t *testing.T) {
 	sender := newTestSDKMessageSender("cli_a", []createMessageResult{
 		{code: 99991663, msg: "missing scope"},

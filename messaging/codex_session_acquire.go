@@ -479,6 +479,10 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 			result.externalState = prepared.state
 			return h.failCodexAcquireSync(result, liveAgent, readyErr), nil
 		}
+		if progressErr := reservation.control.progressError(); progressErr != nil {
+			result.syncErr = progressErr
+			h.recordCodexFollowerSyncFailure(result.route.bindingKey, result.route.threadID, progressErr)
+		}
 		if reservation.reused && opts.followerAttach != nil {
 			if reservation.control == nil {
 				if readyErr := reservation.task.nativeProgressCardReadyError(); readyErr != nil {

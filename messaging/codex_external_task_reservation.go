@@ -48,6 +48,7 @@ type externalCodexTaskReservationControl struct {
 	ready       agent.CodexThreadObserverReady
 	readySeen   bool
 	readyOnce   sync.Once
+	progressErr error
 }
 
 func (c *externalCodexTaskReservationControl) finishWatcher() {
@@ -101,6 +102,26 @@ func (c *externalCodexTaskReservationControl) observerReadyResult() (
 	default:
 		return agent.CodexThreadObserverReady{}, false, nil, false
 	}
+}
+
+func (c *externalCodexTaskReservationControl) setProgressError(err error) {
+	if c == nil || err == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.progressErr == nil {
+		c.progressErr = err
+	}
+	c.mu.Unlock()
+}
+
+func (c *externalCodexTaskReservationControl) progressError() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.progressErr
 }
 
 // prepareExternalCodexTask 只解析外部任务，不占用观察槽或启动观察器。

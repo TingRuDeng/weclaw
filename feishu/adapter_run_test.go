@@ -25,11 +25,36 @@ type stubbornWSRunner struct {
 }
 
 type failingWSRunner struct {
-	err error
+	err     error
+	started chan struct{}
 }
 
-func (f *failingWSRunner) Start(context.Context) error { return f.err }
-func (f *failingWSRunner) Close()                      {}
+func (f *failingWSRunner) Start(context.Context) error {
+	if f.started != nil {
+		close(f.started)
+	}
+	return f.err
+}
+func (f *failingWSRunner) Close() {}
+
+type blockingWSRunner struct {
+	started chan struct{}
+	closed  chan struct{}
+}
+
+func (f *blockingWSRunner) Start(context.Context) error {
+	close(f.started)
+	<-f.closed
+	return nil
+}
+
+func (f *blockingWSRunner) Close() {
+	select {
+	case <-f.closed:
+	default:
+		close(f.closed)
+	}
+}
 
 func (f *stubbornWSRunner) Start(context.Context) error {
 	close(f.started)
@@ -145,22 +170,24 @@ func TestAdapterRunStopsWhenValidationFails(t *testing.T) {
 	}
 }
 
-func TestAdapterRunDoesNotReturnSDKControlledErrorDetails(t *testing.T) {
+func TestAdapterRunRetriesWithoutReturningSDKControlledErrorDetails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.validate = func(context.Context, Credentials) error { return nil }
 	adapter.wsFactory = func(*dispatcher.EventDispatcher) wsRunner {
-		return &failingWSRunner{err: errors.New("connect failed: access_key=secret&ticket=secret")}
+		return &failingWSRunner{err: errors.New("connect failed: access_key=secret&ticket=secret"), started: started}
 	}
 
-	err := adapter.Run(context.Background(), func(context.Context, platform.IncomingMessage, platform.Replier) {})
-	if err == nil {
-		t.Fatal("Run error=nil, want websocket lifecycle error")
-	}
-	if strings.Contains(err.Error(), "access_key") || strings.Contains(err.Error(), "ticket") {
-		t.Fatalf("Run returned SDK-controlled details: %v", err)
-	}
-	if !strings.Contains(err.Error(), "websocket") {
-		t.Fatalf("Run error=%v, want sanitized websocket context", err)
+	done := make(chan error, 1)
+	go func() {
+		done <- adapter.Run(ctx, func(context.Context, platform.IncomingMessage, platform.Replier) {})
+	}()
+	<-started
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run error=%v, want nil after cancellation", err)
 	}
 }
 
@@ -193,4 +220,87 @@ func TestAdapterRunReturnsWhenWSStartIgnoresClose(t *testing.T) {
 		t.Fatal("Run should close ws client on cancellation")
 	}
 	close(ws.release)
+}
+
+func TestAdapterRunReconnectsAfterWebSocketStops(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := &failingWSRunner{err: errors.New("temporary connection failure")}
+	second := &blockingWSRunner{started: make(chan struct{}), closed: make(chan struct{})}
+	var attempts int
+	var validations int
+	var dispatchers []*dispatcher.EventDispatcher
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.validate = func(context.Context, Credentials) error {
+		validations++
+		return nil
+	}
+	adapter.reconnectWait = func(context.Context, time.Duration) error { return nil }
+	adapter.wsFactory = func(eventDispatcher *dispatcher.EventDispatcher) wsRunner {
+		dispatchers = append(dispatchers, eventDispatcher)
+		attempts++
+		if attempts == 1 {
+			return first
+		}
+		return second
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- adapter.Run(ctx, func(context.Context, platform.IncomingMessage, platform.Replier) {})
+	}()
+	select {
+	case <-second.started:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not reconnect after the first websocket stopped")
+	}
+	if attempts != 2 || validations != 2 || len(dispatchers) != 2 || dispatchers[0] == dispatchers[1] {
+		t.Fatalf("attempts=%d validations=%d dispatchers=%d, want two distinct websocket attempts with revalidation", attempts, validations, len(dispatchers))
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run error=%v, want nil after cancellation", err)
+	}
+}
+
+func TestAdapterRunRevalidatesCredentialsBeforeReconnect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := &failingWSRunner{err: errors.New("temporary connection failure")}
+	second := &blockingWSRunner{started: make(chan struct{}), closed: make(chan struct{})}
+	validations := 0
+	attempts := 0
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.reconnectWait = func(context.Context, time.Duration) error { return nil }
+	adapter.validate = func(context.Context, Credentials) error {
+		validations++
+		if validations == 2 {
+			return errors.New("temporary credential validation failure")
+		}
+		return nil
+	}
+	adapter.wsFactory = func(*dispatcher.EventDispatcher) wsRunner {
+		attempts++
+		if attempts == 1 {
+			return first
+		}
+		return second
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- adapter.Run(ctx, func(context.Context, platform.IncomingMessage, platform.Replier) {})
+	}()
+	select {
+	case <-second.started:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not reconnect after credential validation recovered")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run error=%v, want nil after cancellation", err)
+	}
+	if validations != 3 || attempts != 2 {
+		t.Fatalf("validations=%d attempts=%d, want 3 validations and 2 websocket attempts", validations, attempts)
+	}
 }

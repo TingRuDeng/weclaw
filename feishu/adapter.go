@@ -2,7 +2,7 @@ package feishu
 
 import (
 	"context"
-	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +20,10 @@ type wsRunner interface {
 
 const feishuIdentityCacheTTL = 24 * time.Hour
 
-var errFeishuWebSocketStopped = errors.New("feishu websocket connection stopped")
+const (
+	feishuReconnectInitialDelay = time.Second
+	feishuReconnectMaxDelay     = 30 * time.Second
+)
 
 type cachedFeishuIdentity struct {
 	keys   []string
@@ -56,6 +59,7 @@ type Adapter struct {
 	dispatchNoticeDelay time.Duration
 	maxMessageAge       time.Duration
 	messageAcceptAfter  time.Time
+	reconnectWait       func(context.Context, time.Duration) error
 }
 
 // NewAdapter 创建飞书平台 adapter。
@@ -85,6 +89,7 @@ func NewAdapter(creds Credentials) *Adapter {
 		dispatchWait:        feishuMessageDispatchWaitTimeout,
 		dispatchNoticeDelay: feishuMessageDispatchNoticeDelay,
 		maxMessageAge:       DefaultMessageMaxAge,
+		reconnectWait:       waitForFeishuReconnect,
 	}
 	adapter.wsFactory = func(eventDispatcher *dispatcher.EventDispatcher) wsRunner {
 		return larkws.NewClient(
@@ -161,25 +166,64 @@ func (a *Adapter) Run(ctx context.Context, dispatch platform.DispatchFunc) error
 		return err
 	}
 	logPermissionGuide(a.creds.AppID)
-	eventDispatcher := a.newEventDispatcher(dispatch)
-	wsClient := a.wsFactory(eventDispatcher)
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- wsClient.Start(ctx)
-	}()
-	select {
-	case err := <-errCh:
+
+	delay := feishuReconnectInitialDelay
+	reconnecting := false
+	for {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if err == nil {
-			return nil
+		if reconnecting {
+			if err := a.reconnectWait(ctx, delay); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
+			}
+			if err := a.validate(ctx, a.creds); err != nil {
+				log.Printf("[feishu] reconnect credential validation failed; retrying")
+				delay = nextFeishuReconnectDelay(delay)
+				continue
+			}
+			a.beginMessageAcceptance()
 		}
-		return errFeishuWebSocketStopped
-	case <-ctx.Done():
-		wsClient.Close()
-		return nil
+		eventDispatcher := a.newEventDispatcher(dispatch)
+		wsClient := a.wsFactory(eventDispatcher)
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- wsClient.Start(ctx)
+		}()
+		select {
+		case <-ctx.Done():
+			wsClient.Close()
+			return nil
+		case <-errCh:
+			if ctx.Err() != nil {
+				return nil
+			}
+			log.Printf("[feishu] websocket connection stopped; retrying")
+			reconnecting = true
+			delay = nextFeishuReconnectDelay(delay)
+		}
 	}
+}
+
+func waitForFeishuReconnect(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func nextFeishuReconnectDelay(delay time.Duration) time.Duration {
+	if delay >= feishuReconnectMaxDelay/2 {
+		return feishuReconnectMaxDelay
+	}
+	return delay * 2
 }
 
 func (a *Adapter) allowCardActionUser(userID string, aliases []string) bool {
