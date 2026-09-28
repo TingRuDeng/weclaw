@@ -622,8 +622,12 @@ func codexFollowerTerminalDraft(snapshot codexFollowerSnapshot, state externalCo
 		failed = true
 		text = renderFinalFailure("", fmt.Errorf("Codex 本地任务执行失败"))
 	case "interrupted", "cancelled", "canceled":
-		stopped = true
-		text = renderFinalStopped("")
+		// Follower reconciliation has no durable evidence that the user sent
+		// /stop. An interrupted turn may also be caused by a disconnected
+		// observer, Host handoff, or an external client. Do not project that
+		// ambiguous state as "任务已按请求停止"; an explicit result replay can
+		// still render the historical stopped state through its own path.
+		return terminalOutboxDraft{}, false
 	default:
 		return terminalOutboxDraft{}, false
 	}

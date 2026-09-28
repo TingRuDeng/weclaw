@@ -299,6 +299,7 @@ func TestCodexReplayObservedCompletionDoesNotDuplicateLiveResult(t *testing.T) {
 	if !ok {
 		t.Fatal("missing follower")
 	}
+	f.outbox.entries = nil
 	state := replayState("thread-a")
 	if err := f.h.ensureCodexSessions().commitFollowerTurnPending(snapshot, state.LastTurnID); err != nil {
 		t.Fatal(err)
@@ -372,5 +373,27 @@ func TestCodexReplayAndFollowerCatchupShareDeliveryResponsibility(t *testing.T) 
 	}
 	if len(f.outbox.entries) != 1 {
 		t.Fatal("follower catchup duplicated pending replay")
+	}
+}
+
+func TestCodexFollowerCatchupDoesNotProjectUnknownInterruptAsUserStop(t *testing.T) {
+	f := newReplayFixture(t)
+	f.choose(t, replayState("thread-a"))
+	snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok {
+		t.Fatal("missing follower")
+	}
+	f.outbox.entries = nil
+	state := agent.CodexThreadState{
+		ThreadID:           "thread-a",
+		LastTurnID:         "turn-interrupted",
+		LastTurnStatus:     "interrupted",
+		LastTurnBodyLoaded: true,
+	}
+	if err := f.h.reconcileInactiveCodexFollower(snapshot, externalCodexTaskState{CodexThreadState: state}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.outbox.entries) != 0 {
+		t.Fatalf("unknown interrupted turn created a terminal delivery: %+v", f.outbox.entries)
 	}
 }
