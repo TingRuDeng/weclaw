@@ -317,7 +317,7 @@ func (a *ACPAgent) prepareCodexHostSocket(socketPath string) error {
 	if err := validateCodexHostDirectory(parent, a.allowedCodexHostDirectoryUIDs()); err != nil {
 		return err
 	}
-	return validateExistingCodexHostSocket(socketPath, a.allowedCodexHostUIDs())
+	return validateExistingCodexHostSocketForStartup(socketPath, a.allowedCodexHostUIDs())
 }
 
 func (a *ACPAgent) allowedCodexHostDirectoryUIDs() map[uint32]struct{} {
@@ -373,6 +373,22 @@ func (a *ACPAgent) allowedCodexHostUIDs() map[uint32]struct{} {
 }
 
 func validateExistingCodexHostSocket(socketPath string, allowedUIDs map[uint32]struct{}) error {
+	return validateExistingCodexHostSocketWithTempRoot(socketPath, allowedUIDs, codexSocketTempRoot())
+}
+
+func validateExistingCodexHostSocketWithTempRoot(socketPath string, allowedUIDs map[uint32]struct{}, tempRoot string) error {
+	return validateExistingCodexHostSocketWithOptions(socketPath, allowedUIDs, tempRoot, false)
+}
+
+func validateExistingCodexHostSocketForStartup(socketPath string, allowedUIDs map[uint32]struct{}) error {
+	return validateExistingCodexHostSocketWithOptions(socketPath, allowedUIDs, codexSocketTempRoot(), true)
+}
+
+func validateExistingCodexHostSocketForStartupWithTempRoot(socketPath string, allowedUIDs map[uint32]struct{}, tempRoot string) error {
+	return validateExistingCodexHostSocketWithOptions(socketPath, allowedUIDs, tempRoot, true)
+}
+
+func validateExistingCodexHostSocketWithOptions(socketPath string, allowedUIDs map[uint32]struct{}, tempRoot string, allowMissingSymlinkTarget bool) error {
 	info, err := os.Lstat(socketPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -380,7 +396,32 @@ func validateExistingCodexHostSocket(socketPath string, allowedUIDs map[uint32]s
 	if err != nil {
 		return fmt.Errorf("inspect codex app-server socket: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0 {
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, targetErr := filepath.EvalSymlinks(socketPath)
+		if targetErr != nil {
+			if allowMissingSymlinkTarget {
+				linkTarget, readErr := os.Readlink(socketPath)
+				if readErr == nil {
+					if !filepath.IsAbs(linkTarget) {
+						linkTarget = filepath.Join(filepath.Dir(socketPath), linkTarget)
+					}
+					linkTarget = canonicalizeCodexSocketTargetPath(filepath.Clean(linkTarget), tempRoot)
+					if validateCodexSocketSymlinkPathWithTempRoot(filepath.Clean(linkTarget), allowedUIDs, tempRoot, info) {
+						return nil
+					}
+				}
+			}
+			return fmt.Errorf("refusing non-socket codex app-server path: %s", socketPath)
+		}
+		if !validateCodexSocketSymlinkTargetWithTempRoot(target, allowedUIDs, tempRoot) {
+			return fmt.Errorf("refusing non-socket codex app-server path: %s", socketPath)
+		}
+		info, err = os.Lstat(target)
+		if err != nil {
+			return fmt.Errorf("inspect resolved codex app-server socket: %w", err)
+		}
+	}
+	if info.Mode()&os.ModeSocket == 0 {
 		return fmt.Errorf("refusing non-socket codex app-server path: %s", socketPath)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
@@ -393,6 +434,111 @@ func validateExistingCodexHostSocket(socketPath string, allowedUIDs map[uint32]s
 	return nil
 }
 
+// validateCodexSocketSymlinkTarget accepts the endpoint shape emitted by the
+// Codex app-server on macOS: the user-facing socket path is a symlink into a
+// private per-UID directory under the resolved system temp root. The target
+// remains subject to the same owner and permission checks as a direct socket.
+func validateCodexSocketSymlinkTarget(target string, allowedUIDs map[uint32]struct{}) bool {
+	return validateCodexSocketSymlinkTargetWithTempRoot(target, allowedUIDs, codexSocketTempRoot())
+}
+
+func validateCodexSocketSymlinkTargetWithTempRoot(target string, allowedUIDs map[uint32]struct{}, tempRoot string) bool {
+	if !filepath.IsAbs(target) {
+		return false
+	}
+	target = filepath.Clean(target)
+	if !validateCodexSocketSymlinkPathWithTempRoot(target, allowedUIDs, tempRoot, nil) {
+		return false
+	}
+	info, err := os.Lstat(target)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0 {
+		return false
+	}
+	targetStat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode().Perm()&0o077 != 0 {
+		return false
+	}
+	if _, ok := allowedUIDs[targetStat.Uid]; !ok {
+		return false
+	}
+
+	tempRoot = filepath.Clean(tempRoot)
+	_, ok = codexSocketSymlinkParentUID(target, tempRoot)
+	return ok
+}
+
+func validateCodexSocketSymlinkPathWithTempRoot(target string, allowedUIDs map[uint32]struct{}, tempRoot string, linkInfo os.FileInfo) bool {
+	if !filepath.IsAbs(target) {
+		return false
+	}
+	target = filepath.Clean(target)
+	parentUID, ok := codexSocketSymlinkParentUID(target, tempRoot)
+	if !ok {
+		return false
+	}
+	if _, ok := allowedUIDs[parentUID]; !ok {
+		return false
+	}
+	if linkInfo != nil {
+		linkStat, ok := linkInfo.Sys().(*syscall.Stat_t)
+		if !ok {
+			return false
+		}
+		if _, ok := allowedUIDs[linkStat.Uid]; !ok {
+			return false
+		}
+	}
+	parentInfo, err := os.Lstat(filepath.Dir(target))
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil || parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() || parentInfo.Mode().Perm()&0o077 != 0 {
+		return false
+	}
+	parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
+	if !ok || parentStat.Uid != parentUID {
+		return false
+	}
+	return true
+}
+
+func codexSocketSymlinkParentUID(target, tempRoot string) (uint32, bool) {
+	parent := filepath.Dir(filepath.Clean(target))
+	rel, err := filepath.Rel(filepath.Clean(tempRoot), parent)
+	if err != nil || rel == "." || filepath.IsAbs(rel) || strings.Contains(rel, string(filepath.Separator)) {
+		return 0, false
+	}
+	const prefix = "codex-daemon-"
+	if !strings.HasPrefix(rel, prefix) {
+		return 0, false
+	}
+	uid, err := strconv.ParseUint(strings.TrimPrefix(rel, prefix), 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(uid), true
+}
+
+func canonicalizeCodexSocketTargetPath(target, tempRoot string) string {
+	parent := filepath.Dir(target)
+	if resolvedParent, err := filepath.EvalSymlinks(parent); err == nil && filepath.IsAbs(resolvedParent) {
+		return filepath.Join(filepath.Clean(resolvedParent), filepath.Base(target))
+	}
+	rawTempRoot := filepath.Join(string(filepath.Separator), "tmp")
+	if resolvedRoot := filepath.Clean(tempRoot); resolvedRoot != rawTempRoot && (target == rawTempRoot || strings.HasPrefix(target, rawTempRoot+string(filepath.Separator))) {
+		return filepath.Join(resolvedRoot, strings.TrimPrefix(target, rawTempRoot+string(filepath.Separator)))
+	}
+	return target
+}
+
+func codexSocketTempRoot() string {
+	tempRoot := filepath.Join(string(filepath.Separator), "tmp")
+	if resolved, err := filepath.EvalSymlinks(tempRoot); err == nil && filepath.IsAbs(resolved) {
+		return filepath.Clean(resolved)
+	}
+	return tempRoot
+}
+
 func (a *ACPAgent) removeStaleCodexHostSocket(socketPath string) error {
 	info, err := os.Lstat(socketPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -401,10 +547,10 @@ func (a *ACPAgent) removeStaleCodexHostSocket(socketPath string) error {
 	if err != nil {
 		return fmt.Errorf("inspect stale codex app-server socket: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0 {
+	if info.Mode()&os.ModeSymlink == 0 && info.Mode()&os.ModeSocket == 0 {
 		return fmt.Errorf("refusing to replace non-socket codex app-server path: %s", socketPath)
 	}
-	if err := validateExistingCodexHostSocket(socketPath, a.allowedCodexHostUIDs()); err != nil {
+	if err := validateExistingCodexHostSocketForStartup(socketPath, a.allowedCodexHostUIDs()); err != nil {
 		return err
 	}
 	if err := os.Remove(socketPath); err != nil {

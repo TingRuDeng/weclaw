@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // codexRuntimeModeSnapshot 返回当前 Host 级写入权威。零值统一视为 unknown。
@@ -216,7 +217,18 @@ func existingCodexHostSocket(socketPath string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("检查共享 Codex Host socket: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0 {
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, targetErr := filepath.EvalSymlinks(socketPath)
+		allowedUIDs := map[uint32]struct{}{uint32(os.Geteuid()): {}}
+		if targetErr != nil || !validateCodexSocketSymlinkTarget(target, allowedUIDs) {
+			return false, fmt.Errorf("共享 Codex Host endpoint 不是安全 Unix socket: %s", socketPath)
+		}
+		info, err = os.Lstat(target)
+		if err != nil {
+			return false, fmt.Errorf("检查共享 Codex Host resolved socket: %w", err)
+		}
+	}
+	if info.Mode()&os.ModeSocket == 0 {
 		return false, fmt.Errorf("共享 Codex Host endpoint 不是安全 Unix socket: %s", socketPath)
 	}
 	return true, nil

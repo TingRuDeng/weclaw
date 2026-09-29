@@ -368,6 +368,108 @@ func TestACPAgentRejectsNonSocketCodexHostPath(t *testing.T) {
 	}
 }
 
+func TestACPAgentAcceptsCodexManagedSocketSymlink(t *testing.T) {
+	tempRoot, err := os.MkdirTemp("/tmp", "cw-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tempRoot) })
+	if err := os.Chmod(tempRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := filepath.Join(tempRoot, "codex-daemon-"+strconv.Itoa(os.Geteuid()))
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(targetDir, "weclaw-test-"+strconv.Itoa(os.Getpid()))
+	listener, err := net.Listen("unix", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	if err := os.Chmod(target, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	endpoint := filepath.Join(t.TempDir(), "app-server.sock")
+	if err := os.Chmod(filepath.Dir(endpoint), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(tempRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowedUIDs := map[uint32]struct{}{uint32(os.Geteuid()): {}}
+	if err := validateExistingCodexHostSocketWithTempRoot(endpoint, allowedUIDs, resolvedRoot); err != nil {
+		t.Fatalf("validateExistingCodexHostSocket() error=%v, want protected Codex socket symlink accepted", err)
+	}
+}
+
+func TestACPAgentAcceptsStaleCodexManagedSocketSymlinkForStartup(t *testing.T) {
+	tempRoot, err := os.MkdirTemp("/tmp", "cw-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tempRoot) })
+	if err := os.Chmod(tempRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	targetDir := filepath.Join(tempRoot, "codex-daemon-"+strconv.Itoa(os.Geteuid()))
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(targetDir, "stale-"+strconv.Itoa(os.Getpid()))
+	endpoint := filepath.Join(t.TempDir(), "app-server.sock")
+	if err := os.Chmod(filepath.Dir(endpoint), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(tempRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowedUIDs := map[uint32]struct{}{uint32(os.Geteuid()): {}}
+	if err := validateExistingCodexHostSocketForStartupWithTempRoot(endpoint, allowedUIDs, resolvedRoot); err != nil {
+		t.Fatalf("startup validation error=%v, want safe stale symlink accepted for cleanup", err)
+	}
+}
+
+func TestACPAgentRejectsStaleCodexManagedSocketSymlinkForForeignUID(t *testing.T) {
+	tempRoot, err := os.MkdirTemp("/tmp", "cw-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tempRoot) })
+	if err := os.Chmod(tempRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	foreignUID := uint32(0)
+	if currentUID := uint32(os.Geteuid()); currentUID == 0 {
+		foreignUID = 1
+	}
+	target := filepath.Join(tempRoot, "codex-daemon-"+strconv.FormatUint(uint64(foreignUID), 10), "stale")
+	endpoint := filepath.Join(t.TempDir(), "app-server.sock")
+	if err := os.Chmod(filepath.Dir(endpoint), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(tempRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowedUIDs := map[uint32]struct{}{uint32(os.Geteuid()): {}}
+	if err := validateExistingCodexHostSocketForStartupWithTempRoot(endpoint, allowedUIDs, resolvedRoot); err == nil {
+		t.Fatal("startup validation error=nil, want foreign UID stale symlink rejection")
+	}
+}
+
 func TestACPAgentRejectsSymlinkCodexHostParent(t *testing.T) {
 	realParent := t.TempDir()
 	linkRoot := t.TempDir()
