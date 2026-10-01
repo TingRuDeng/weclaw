@@ -128,6 +128,29 @@ func TestCodexDaemonProcessCommandRequiresExactManagedBinary(t *testing.T) {
 	}
 }
 
+func TestCodexDaemonProcessCommandAcceptsResolvedManagedBinary(t *testing.T) {
+	dir := t.TempDir()
+	managed := filepath.Join(dir, "current", "bin", "codex")
+	release := filepath.Join(dir, "releases", "0.159.3-aarch64-apple-darwin", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(release), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "releases", "0.159.3-aarch64-apple-darwin"), filepath.Join(dir, "current")); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(managed)
+	if err != nil {
+		t.Fatalf("resolve managed symlink: %v", err)
+	}
+
+	if !codexDaemonProcessCommandMatches(resolved+" app-server --listen unix://", managed) {
+		t.Fatalf("resolved release command rejected: managed=%q release=%q", managed, release)
+	}
+}
+
 func TestCodexDaemonLifecycleCommandUsesStandaloneBinary(t *testing.T) {
 	a, socketPath := newCodexDaemonTestAgent(t)
 	if _, err := a.resolveCodexDaemonLifecycleCommand(); !errors.Is(err, errCodexDaemonInstallRequired) {
@@ -144,6 +167,26 @@ func TestCodexDaemonLifecycleCommandUsesStandaloneBinary(t *testing.T) {
 	got, err := a.resolveCodexDaemonLifecycleCommand()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got != binary {
+		t.Fatalf("lifecycle command=%q, want standalone %q", got, binary)
+	}
+}
+
+func TestCodexDaemonLifecycleCommandSupportsBinLayout(t *testing.T) {
+	a, socketPath := newCodexDaemonTestAgent(t)
+	home := filepath.Dir(filepath.Dir(socketPath))
+	binary := filepath.Join(home, "packages", "standalone", "current", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := a.resolveCodexDaemonLifecycleCommand()
+	if err != nil {
+		t.Fatalf("resolveCodexDaemonLifecycleCommand() error=%v", err)
 	}
 	if got != binary {
 		t.Fatalf("lifecycle command=%q, want standalone %q", got, binary)

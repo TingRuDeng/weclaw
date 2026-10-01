@@ -109,13 +109,51 @@ func codexDaemonManagedBinaryPath(codexHome string) string {
 	return filepath.Join(codexHome, "packages", "standalone", "current", "codex")
 }
 
+// codexDaemonManagedBinaryCandidates covers both standalone package layouts:
+// older releases put the executable directly below current, while newer
+// releases publish it below current/bin. Keep the legacy helper above stable
+// for metadata fixtures and resolve the installed executable through this list.
+func codexDaemonManagedBinaryCandidates(codexHome string) []string {
+	current := filepath.Join(codexHome, "packages", "standalone", "current")
+	return []string{filepath.Join(current, "bin", "codex"), filepath.Join(current, "codex")}
+}
+
+func resolveCodexDaemonManagedBinaryPath(codexHome string) (string, error) {
+	candidates := codexDaemonManagedBinaryCandidates(codexHome)
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err != nil {
+			continue
+		}
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return filepath.Clean(candidate), nil
+		}
+	}
+	return "", fmt.Errorf(
+		"%w: expected executable %s or %s",
+		errCodexDaemonInstallRequired,
+		candidates[0],
+		candidates[1],
+	)
+}
+
+func codexDaemonManagedBinaryPathMatches(codexHome, path string) bool {
+	clean := filepath.Clean(path)
+	for _, candidate := range codexDaemonManagedBinaryCandidates(codexHome) {
+		if clean == filepath.Clean(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
 func codexDaemonPIDPath(codexHome string) string {
 	return filepath.Join(codexHome, "app-server-daemon", "app-server.pid")
 }
 
 func codexDaemonStandaloneAvailable(codexHome string) bool {
-	info, err := os.Stat(codexDaemonManagedBinaryPath(codexHome))
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+	_, err := resolveCodexDaemonManagedBinaryPath(codexHome)
+	return err == nil
 }
 
 func (a *ACPAgent) resolveCodexDaemonLifecycleCommand() (string, error) {
@@ -123,13 +161,9 @@ func (a *ACPAgent) resolveCodexDaemonLifecycleCommand() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve CODEX_HOME for official daemon: %w", err)
 	}
-	command := codexDaemonManagedBinaryPath(codexHome)
-	if !codexDaemonStandaloneAvailable(codexHome) {
-		return "", fmt.Errorf(
-			"%w: expected executable %s",
-			errCodexDaemonInstallRequired,
-			command,
-		)
+	command, err := resolveCodexDaemonManagedBinaryPath(codexHome)
+	if err != nil {
+		return "", err
 	}
 	return command, nil
 }
@@ -494,7 +528,10 @@ func (a *ACPAgent) recordCodexDaemonMetadata(
 	if err != nil {
 		return codexHostMetadata{}, err
 	}
-	expectedManagedPath := filepath.Clean(codexDaemonManagedBinaryPath(codexHome))
+	expectedManagedPath, err := resolveCodexDaemonManagedBinaryPath(codexHome)
+	if err != nil {
+		return codexHostMetadata{}, err
+	}
 	if filepath.Clean(output.ManagedCodexPath) != expectedManagedPath {
 		return codexHostMetadata{}, fmt.Errorf(
 			"%w: managed Codex path=%s, expected=%s",
@@ -579,11 +616,26 @@ func (a *ACPAgent) recordCodexDaemonMetadata(
 func codexDaemonProcessCommandMatches(command, managedCodexPath string) bool {
 	command = strings.TrimSpace(command)
 	managedCodexPath = filepath.Clean(strings.TrimSpace(managedCodexPath))
-	if command == "" || managedCodexPath == "." || !strings.HasPrefix(command, managedCodexPath) {
+	if command == "" || managedCodexPath == "." {
 		return false
 	}
-	rest := strings.TrimSpace(strings.TrimPrefix(command, managedCodexPath))
-	return rest == "app-server" || strings.HasPrefix(rest, "app-server ")
+	paths := []string{managedCodexPath}
+	if resolved, err := filepath.EvalSymlinks(managedCodexPath); err == nil {
+		resolved = filepath.Clean(resolved)
+		if resolved != managedCodexPath {
+			paths = append(paths, resolved)
+		}
+	}
+	for _, path := range paths {
+		if !strings.HasPrefix(command, path) {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(command, path))
+		if rest == "app-server" || strings.HasPrefix(rest, "app-server ") {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *ACPAgent) validateCodexDaemonManagement(
@@ -715,13 +767,12 @@ func (a *ACPAgent) readCodexDaemonPIDRecordForSocket(
 			errCodexDaemonUnmanaged,
 		)
 	}
-	expectedManagedPath := filepath.Clean(codexDaemonManagedBinaryPath(codexHome))
-	if filepath.Clean(metadata.ManagedCodexPath) != expectedManagedPath {
+	if !codexDaemonManagedBinaryPathMatches(codexHome, metadata.ManagedCodexPath) {
 		return codexDaemonPIDRecord{}, fmt.Errorf(
 			"%w: protected daemon metadata managed path=%s, expected=%s",
 			errCodexDaemonUnmanaged,
 			metadata.ManagedCodexPath,
-			expectedManagedPath,
+			strings.Join(codexDaemonManagedBinaryCandidates(codexHome), " or "),
 		)
 	}
 	if metadata.PID <= 0 || metadata.ProcessGroupID <= 0 || strings.TrimSpace(metadata.ProcessStart) == "" {

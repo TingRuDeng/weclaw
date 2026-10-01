@@ -280,6 +280,34 @@ func normalizeCodexAppBridgeArgs(args []string, dir string) ([]string, string, e
 	return result, pipe, nil
 }
 
+// codexAppStaticArgs returns the part of the App command line that identifies
+// the shared Host. The native App may add or refresh the codex_app MCP
+// definition between its bootstrap connection and its real connection; that
+// definition is applied through the pipe files below and must not force a Host
+// restart.
+func codexAppStaticArgs(args []string) []string {
+	result := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-c" && i+1 < len(args) && isCodexAppDynamicConfigArg(args[i+1]) {
+			i++
+			continue
+		}
+		arg := args[i]
+		if isCodexAppDynamicConfigArg(arg) {
+			continue
+		}
+		result = append(result, arg)
+	}
+	return result
+}
+
+func isCodexAppDynamicConfigArg(arg string) bool {
+	return strings.HasPrefix(arg, "mcp_servers.codex_app=") ||
+		strings.HasPrefix(arg, "mcp_servers.codex_app.") ||
+		strings.HasPrefix(arg, "plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app=") ||
+		strings.HasPrefix(arg, "plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.")
+}
+
 // RunCodexAppBridge is the App's stdio entry point. It never resumes or releases
 // a thread itself, and EOF disconnects only this frontend, not the shared Host.
 func (a *ACPAgent) RunCodexAppBridge(ctx context.Context, args []string, input io.Reader, output, stderr io.Writer) error {
@@ -362,8 +390,11 @@ func (a *ACPAgent) connectCodexAppBridgeLocked(ctx context.Context, socket, bina
 		previous, err := securefile.Read(argsPath)
 		var prior []string
 		if err != nil || json.Unmarshal(previous, &prior) != nil || !slices.Equal(prior, args) {
-			_ = conn.Close()
-			return nil, fmt.Errorf("Codex App 启动配置已变化；当前共享任务保留，请在任务结束后重启共享服务")
+			if err != nil || json.Unmarshal(previous, &prior) != nil ||
+				!slices.Equal(codexAppStaticArgs(prior), codexAppStaticArgs(args)) {
+				_ = conn.Close()
+				return nil, fmt.Errorf("Codex App 启动配置已变化；当前共享任务保留，请在任务结束后重启共享服务")
+			}
 		}
 		_, err = saveCodexAppPipe(dir, pipe)
 		if err != nil {

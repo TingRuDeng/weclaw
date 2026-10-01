@@ -1193,9 +1193,8 @@ func (a *ACPAgent) stopOfficialDaemonProcessGroupFallback(
 	if err != nil {
 		return fmt.Errorf("读取 official daemon protected metadata: %w", err)
 	}
-	expectedPath := filepath.Clean(codexDaemonManagedBinaryPath(codexHome))
 	if metadata.Manager != codexHostManagerDaemon || metadata.State != "running" ||
-		metadata.ManagedCodexPath == "" || filepath.Clean(metadata.ManagedCodexPath) != expectedPath ||
+		metadata.ManagedCodexPath == "" || !codexDaemonManagedBinaryPathMatches(codexHome, metadata.ManagedCodexPath) ||
 		metadata.PID != expected.hostPID || metadata.ProcessGroupID != expected.group.PGID ||
 		metadata.ProcessGroupID != metadata.PID || metadata.UID != expected.group.UID {
 		return fmt.Errorf("official daemon protected metadata 与 PGID %d 不一致", expected.group.PGID)

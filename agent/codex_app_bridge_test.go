@@ -169,6 +169,30 @@ func TestCodexAppBridgePreservesSettingsAcrossAppPipeChanges(t *testing.T) {
 	}
 }
 
+func TestCodexAppBridgeAcceptsDynamicMCPConfigOnExistingHost(t *testing.T) {
+	prior := []string{"-c", "features.code_mode_host=true", "app-server", "--analytics-default-enabled"}
+	current := append(slices.Clone(prior), "-c", `mcp_servers.codex_app={env={CODEX_APP_TOOLS_PIPE_PATH="/tmp/app.sock"}}`)
+	if !slices.Equal(codexAppStaticArgs(prior), codexAppStaticArgs(current)) {
+		t.Fatalf("dynamic MCP config changed shared Host identity: prior=%v current=%v", prior, current)
+	}
+	withBridgePreload := append(slices.Clone(current), "-c", `mcp_servers.codex_app.env.NODE_OPTIONS="\\\"--import=file:///tmp/mcp-env.mjs\\\""`)
+	if !slices.Equal(codexAppStaticArgs(prior), codexAppStaticArgs(withBridgePreload)) {
+		t.Fatalf("bridge preload config changed shared Host identity: prior=%v current=%v", prior, withBridgePreload)
+	}
+	withPluginOverride := append(slices.Clone(withBridgePreload), "-c", "plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true")
+	if !slices.Equal(codexAppStaticArgs(prior), codexAppStaticArgs(withPluginOverride)) {
+		t.Fatalf("plugin MCP config changed shared Host identity: prior=%v current=%v", prior, withPluginOverride)
+	}
+	withPluginDefinition := append(slices.Clone(withPluginOverride), "-c", `plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app={enabled=true}`)
+	if !slices.Equal(codexAppStaticArgs(prior), codexAppStaticArgs(withPluginDefinition)) {
+		t.Fatalf("plugin MCP definition changed shared Host identity: prior=%v current=%v", prior, withPluginDefinition)
+	}
+	changed := append(slices.Clone(prior), "--listen", "unix:///tmp/other.sock")
+	if slices.Equal(codexAppStaticArgs(prior), codexAppStaticArgs(changed)) {
+		t.Fatal("transport override was incorrectly treated as dynamic MCP config")
+	}
+}
+
 func TestCodexAppBridgeRejectsConflictingTransportAndPreload(t *testing.T) {
 	for _, args := range [][]string{
 		{"app-server", "--listen", "unix:///tmp/other.sock"},
