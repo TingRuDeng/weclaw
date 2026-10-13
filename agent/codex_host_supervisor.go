@@ -305,7 +305,7 @@ func (a *ACPAgent) validateManagedCodexHost(socketPath string) (codexHostMetadat
 		return codexHostMetadata{}, codexauth.NewError(codexauth.CodeUnmanagedHost, "Codex Host 进程身份无法确认", err)
 	}
 	if identity.uid != metadata.UID || identity.pgid != metadata.ProcessGroupID ||
-		identity.start != metadata.ProcessStart || identity.commandHash != metadata.ObservedCommandHash {
+		!sameCodexProcessStart(identity.start, metadata.ProcessStart) || identity.commandHash != metadata.ObservedCommandHash {
 		return codexHostMetadata{}, codexauth.NewError(codexauth.CodeUnmanagedHost, "Codex Host 进程身份与受管记录不一致", nil)
 	}
 	allowedProcessUIDs, err := a.codexHostConflictAllowedUIDs()
@@ -456,7 +456,13 @@ func inspectCodexHostProcess(pid int) (codexProcessIdentity, error) {
 }
 
 func psProcessField(pid int, field string) (string, error) {
-	output, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", field).Output()
+	command := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", field)
+	if field == "lstart=" {
+		// App, CLI and service may have different locale settings. Keep the
+		// existing local timezone for compatibility with records without a zone.
+		command.Env = append(os.Environ(), "LC_ALL=C")
+	}
+	output, err := command.Output()
 	if err != nil {
 		return "", fmt.Errorf("inspect process %d: %w", pid, err)
 	}

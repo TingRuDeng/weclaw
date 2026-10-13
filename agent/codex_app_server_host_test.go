@@ -667,6 +667,14 @@ func (s *fakeCodexHost) serve(conn *websocket.Conn) {
 			s.threads["thread-shared"] = true
 			s.mu.Unlock()
 			result = map[string]interface{}{"thread": map[string]string{"id": "thread-shared"}}
+		case "thread/loaded/list":
+			s.mu.Lock()
+			ids := make([]string, 0, len(s.threads))
+			for id := range s.threads {
+				ids = append(ids, id)
+			}
+			s.mu.Unlock()
+			result = map[string]interface{}{"data": ids, "nextCursor": nil}
 		case "thread/read":
 			var params struct {
 				ThreadID string `json:"threadId"`

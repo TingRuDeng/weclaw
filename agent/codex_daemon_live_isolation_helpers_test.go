@@ -603,7 +603,7 @@ func stopCodexDaemonLiveUpdaterWithDeps(
 			}
 			return fmt.Errorf("verify isolated Codex updater PID %d exit: %w", record.PID, err)
 		}
-		if current.start != record.ProcessStartTime {
+		if !sameCodexProcessStart(current.start, record.ProcessStartTime) {
 			return nil
 		}
 		select {
@@ -622,7 +622,7 @@ func validateCodexDaemonLiveUpdaterIdentity(
 	expectedBinary string,
 ) error {
 	if identity.uid != uint32(os.Geteuid()) || identity.pgid != record.PID ||
-		identity.start != record.ProcessStartTime {
+		!sameCodexProcessStart(identity.start, record.ProcessStartTime) {
 		return fmt.Errorf("isolated Codex updater PID %d identity mismatch; refusing to signal", record.PID)
 	}
 	if !codexDaemonLiveUpdaterArgsMatch(args, expectedBinary) {

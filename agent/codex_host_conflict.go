@@ -855,7 +855,7 @@ func (a *ACPAgent) classifyManagedCodexHostConflictTarget(
 			}
 			identity, identityErr := a.inspectRestartCodexHostProcess(process.PID)
 			if identityErr != nil || identity.uid != metadata.UID || identity.pgid != metadata.ProcessGroupID ||
-				identity.start != metadata.ProcessStart || identity.commandHash != metadata.ObservedCommandHash {
+				!sameCodexProcessStart(identity.start, metadata.ProcessStart) || identity.commandHash != metadata.ObservedCommandHash {
 				continue
 			}
 			return codexHostConflictTarget{
@@ -1214,7 +1214,7 @@ func (a *ACPAgent) stopOfficialDaemonProcessGroupFallback(
 			break
 		}
 	}
-	if hostProof.PID == 0 || metadata.ProcessStart != hostProof.Start || metadata.ObservedCommandHash != hostProof.CommandHash {
+	if hostProof.PID == 0 || !sameCodexProcessStart(metadata.ProcessStart, hostProof.Start) || metadata.ObservedCommandHash != hostProof.CommandHash {
 		return fmt.Errorf("official daemon metadata 的启动时间或命令哈希与进程不一致")
 	}
 

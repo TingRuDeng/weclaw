@@ -165,6 +165,13 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 	} else if err := a.preflightConnectedManagedCodexHost(ctx, socketPath); err != nil {
 		return CodexCLILaunch{}, err
 	}
+	if sharedApp {
+		if pending, err := a.readCodexAppBootstrap(socketPath); err != nil {
+			return CodexCLILaunch{}, err
+		} else if pending != nil {
+			return CodexCLILaunch{}, fmt.Errorf("Codex App 共享配置尚未确认；请等待 App 就绪后重试")
+		}
+	}
 
 	env, err := mergeEnv(os.Environ(), a.env)
 	if err != nil {

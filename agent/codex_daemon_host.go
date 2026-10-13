@@ -559,7 +559,7 @@ func (a *ACPAgent) recordCodexDaemonMetadata(
 	if identity.pgid != record.PID {
 		return codexHostMetadata{}, fmt.Errorf("%w: daemon process is not in its own session", errCodexDaemonUnmanaged)
 	}
-	if identity.start != record.ProcessStartTime {
+	if !sameCodexProcessStart(identity.start, record.ProcessStartTime) {
 		return codexHostMetadata{}, fmt.Errorf("%w: daemon process start time mismatch", errCodexDaemonUnmanaged)
 	}
 	command, err := psProcessField(record.PID, "command=")
@@ -578,7 +578,7 @@ func (a *ACPAgent) recordCodexDaemonMetadata(
 		sameProcess := previous.Manager == codexHostManagerDaemon &&
 			previous.PID == record.PID &&
 			previous.UID == identity.uid &&
-			previous.ProcessStart == identity.start &&
+			sameCodexProcessStart(previous.ProcessStart, identity.start) &&
 			previous.ObservedCommandHash == identity.commandHash
 		if sameProcess {
 			generation = previous.Generation
@@ -658,7 +658,7 @@ func (a *ACPAgent) validateCodexDaemonManagement(
 	if err != nil {
 		return err
 	}
-	if record.PID != metadata.PID || record.ProcessStartTime != metadata.ProcessStart {
+	if record.PID != metadata.PID || !sameCodexProcessStart(record.ProcessStartTime, metadata.ProcessStart) {
 		return codexauth.NewError(
 			codexauth.CodeConflict,
 			"Codex daemon 已切换到新一代，请重试账号操作",
@@ -680,7 +680,7 @@ func (a *ACPAgent) verifyCodexDaemonStopped(
 	record, recordErr := a.readCodexDaemonPIDRecord(codexDaemonPIDPath(codexHome))
 	switch {
 	case recordErr == nil:
-		if record.PID == expected.PID && record.ProcessStartTime == expected.ProcessStart {
+		if record.PID == expected.PID && sameCodexProcessStart(record.ProcessStartTime, expected.ProcessStart) {
 			return codexauth.NewError(
 				codexauth.CodeConflict,
 				"Codex daemon stop 返回后原 Host 仍有活动记录",

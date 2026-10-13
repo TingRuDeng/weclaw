@@ -189,26 +189,14 @@ func (a *ACPAgent) launchCodexAppSharedClient(ctx context.Context) (int, error) 
 		return 0, err
 	}
 	if conn, err := dialCodexHost(ctx, socket); err == nil {
-		lock, err := a.acquireCodexHostStartupLock(ctx, socket)
+		_ = conn.Close()
+		ready, err := a.attachReadyCodexAppHost(ctx, socket, launcher)
+		if ready && err == nil {
+			return 0, nil
+		}
 		if err != nil {
-			_ = conn.Close()
 			return 0, err
 		}
-		err = a.preflightConnectedManagedCodexHost(ctx, socket)
-		releaseCodexHostStartupLock(lock)
-		if err != nil {
-			_ = conn.Close()
-			return 0, err
-		}
-		if err := a.configureCodexAppSharedEnvironment(ctx, launcher, false); err != nil {
-			_ = conn.Close()
-			return 0, err
-		}
-		if err := a.attachCodexHostConnection(conn); err != nil {
-			_ = conn.Close()
-			return 0, err
-		}
-		return 0, nil
 	}
 	if err := a.PrepareCodexApp(ctx); err != nil {
 		return 0, err
@@ -217,23 +205,14 @@ func (a *ACPAgent) launchCodexAppSharedClient(ctx context.Context) (int, error) 
 	defer cancel()
 	for {
 		if conn, err := dialCodexHost(waitCtx, socket); err == nil {
-			// The bridge records process identity while holding this same lock.
-			lock, err := a.acquireCodexHostStartupLock(waitCtx, socket)
+			_ = conn.Close()
+			ready, err := a.attachReadyCodexAppHost(waitCtx, socket, launcher)
+			if ready && err == nil {
+				return 0, nil
+			}
 			if err != nil {
-				_ = conn.Close()
 				return 0, err
 			}
-			err = a.preflightConnectedManagedCodexHost(waitCtx, socket)
-			releaseCodexHostStartupLock(lock)
-			if err != nil {
-				_ = conn.Close()
-				return 0, err
-			}
-			if err := a.attachCodexHostConnection(conn); err != nil {
-				_ = conn.Close()
-				return 0, err
-			}
-			return 0, nil
 		}
 		select {
 		case <-waitCtx.Done():
@@ -243,11 +222,48 @@ func (a *ACPAgent) launchCodexAppSharedClient(ctx context.Context) (int, error) 
 	}
 }
 
+func (a *ACPAgent) attachReadyCodexAppHost(ctx context.Context, socket, launcher string) (bool, error) {
+	// Publishing process identity and confirming App configuration share this
+	// lock, so message/CLI clients cannot start a task on a provisional Host.
+	lock, err := a.acquireCodexHostStartupLock(ctx, socket)
+	if err != nil {
+		return false, err
+	}
+	defer releaseCodexHostStartupLock(lock)
+	if err := a.preflightConnectedManagedCodexHost(ctx, socket); err != nil {
+		return false, err
+	}
+	if pending, err := a.readCodexAppBootstrap(socket); err != nil {
+		return false, err
+	} else if pending != nil {
+		return false, nil
+	}
+	if err := a.configureCodexAppSharedEnvironment(ctx, launcher, false); err != nil {
+		return false, err
+	}
+	// Dial after taking the lock: a connection opened while waiting may still
+	// refer to the provisional Host that the formal App connection replaced.
+	conn, err := dialCodexHost(ctx, socket)
+	if err != nil {
+		return false, err
+	}
+	if err := a.attachCodexHostConnection(conn); err != nil {
+		_ = conn.Close()
+		return false, err
+	}
+	return true, nil
+}
+
 // normalizeCodexAppBridgeArgs keeps App's permissions, feature flags and MCP
 // settings intact. Only its per-launch pipe is resolved at MCP startup.
 func normalizeCodexAppBridgeArgs(args []string, dir string) ([]string, string, error) {
+	return normalizeCodexAppBridgeArgsWithPipe(args, dir, "")
+}
+
+func normalizeCodexAppBridgeArgsWithPipe(args []string, dir, environmentPipe string) ([]string, string, error) {
 	result := make([]string, 0, len(args)+2)
 	pipe := ""
+	modernTools := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--stdio" {
@@ -255,6 +271,19 @@ func normalizeCodexAppBridgeArgs(args []string, dir string) ([]string, string, e
 		}
 		if arg == "--listen" || strings.HasPrefix(arg, "--listen=") {
 			return nil, "", fmt.Errorf("Codex App bridge transport cannot be overridden")
+		}
+		if strings.HasPrefix(arg, codexAppToolsEnabledKey) {
+			value := strings.TrimPrefix(arg, codexAppToolsEnabledKey)
+			if value != "true" && value != "false" {
+				return nil, "", fmt.Errorf("Codex App tools enabled override must be a boolean")
+			}
+			modernTools = true
+			if value == "true" {
+				if environmentPipe == "" || !filepath.IsAbs(environmentPipe) {
+					return nil, "", fmt.Errorf("Codex App tools require an absolute CODEX_APP_TOOLS_PIPE_PATH")
+				}
+				pipe = environmentPipe
+			}
 		}
 		if strings.HasPrefix(arg, "mcp_servers.codex_app=") {
 			match := codexAppPipeOverride.FindStringSubmatch(arg)
@@ -270,7 +299,7 @@ func normalizeCodexAppBridgeArgs(args []string, dir string) ([]string, string, e
 		}
 		result = append(result, arg)
 	}
-	if pipe != "" {
+	if pipe != "" && !modernTools {
 		preload := "--import=" + (&url.URL{Scheme: "file", Path: filepath.Join(dir, "mcp-env.mjs")}).String()
 		// Node's NODE_OPTIONS parser accepts a quoted option, including spaces.
 		quoted, _ := json.Marshal(preload)
@@ -280,11 +309,9 @@ func normalizeCodexAppBridgeArgs(args []string, dir string) ([]string, string, e
 	return result, pipe, nil
 }
 
-// codexAppStaticArgs returns the part of the App command line that identifies
-// the shared Host. The native App may add or refresh the codex_app MCP
-// definition between its bootstrap connection and its real connection; that
-// definition is applied through the pipe files below and must not force a Host
-// restart.
+// codexAppStaticArgs removes codex_app overlays only for the early configuration
+// reader's base comparison. A formal App connection must match all saved args;
+// only its per-launch pipe can be refreshed without restarting the Host.
 func codexAppStaticArgs(args []string) []string {
 	result := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
@@ -337,7 +364,7 @@ func (a *ACPAgent) RunCodexAppBridge(ctx context.Context, args []string, input i
 		return err
 	}
 	dir := codexAppBridgeDirectory(socket)
-	normalized, pipe, err := normalizeCodexAppBridgeArgs(args, dir)
+	normalized, pipe, err := normalizeCodexAppBridgeArgsWithPipe(args, dir, codexAgentEnvironmentValue(a.env, "CODEX_APP_TOOLS_PIPE_PATH"))
 	if err != nil {
 		return err
 	}
@@ -351,6 +378,9 @@ func (a *ACPAgent) RunCodexAppBridge(ctx context.Context, args []string, input i
 		return err
 	}
 	defer conn.Close()
+	if !codexAppHasConfiguration(normalized) {
+		return relayCodexAppBridgeFiltered(ctx, conn, input, output, validateCodexAppBootstrapMessage)
+	}
 	return relayCodexAppBridge(ctx, conn, input, output)
 }
 
@@ -376,12 +406,18 @@ func (a *ACPAgent) runCodexAppToolClient(ctx context.Context, input io.Reader, o
 	if err := a.preflightConnectedManagedCodexHost(ctx, socket); err != nil {
 		return err
 	}
+	if pending, err := a.readCodexAppBootstrap(socket); err != nil {
+		return err
+	} else if pending != nil {
+		return fmt.Errorf("Codex App 共享服务正在初始化；请等待正式连接就绪")
+	}
 	return relayCodexAppBridge(ctx, conn, input, output)
 }
 
 func (a *ACPAgent) connectCodexAppBridgeLocked(ctx context.Context, socket, binary string, args []string, pipe string) (*websocket.Conn, error) {
 	dir := codexAppBridgeDirectory(socket)
 	argsPath := filepath.Join(dir, "app-args.json")
+	bootstrap := !codexAppHasConfiguration(args)
 	if conn, dialErr := dialCodexHost(ctx, socket); dialErr == nil {
 		if err := a.preflightConnectedManagedCodexHost(ctx, socket); err != nil {
 			_ = conn.Close()
@@ -389,12 +425,29 @@ func (a *ACPAgent) connectCodexAppBridgeLocked(ctx context.Context, socket, bina
 		}
 		previous, err := securefile.Read(argsPath)
 		var prior []string
-		if err != nil || json.Unmarshal(previous, &prior) != nil || !slices.Equal(prior, args) {
-			if err != nil || json.Unmarshal(previous, &prior) != nil ||
-				!slices.Equal(codexAppStaticArgs(prior), codexAppStaticArgs(args)) {
+		if err != nil || json.Unmarshal(previous, &prior) != nil || !slices.Equal(codexAppBootstrapArgs(prior), codexAppBootstrapArgs(args)) {
+			_ = conn.Close()
+			return nil, fmt.Errorf("Codex App 启动配置已变化；当前共享任务保留，请在任务结束后重启共享服务")
+		}
+		if bootstrap {
+			// Policy/config readers do not request a change to MCP settings.
+			if _, err := a.readCodexAppBootstrap(socket); err != nil {
 				_ = conn.Close()
-				return nil, fmt.Errorf("Codex App 启动配置已变化；当前共享任务保留，请在任务结束后重启共享服务")
+				return nil, err
 			}
+			return conn, nil
+		}
+		pending, err := a.readCodexAppBootstrap(socket)
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		if !slices.Equal(prior, args) {
+			_ = conn.Close()
+			if err := a.replaceCodexAppBootstrapLocked(ctx, socket, pending); err != nil {
+				return nil, err
+			}
+			return a.startCodexAppBridgeConfiguredLocked(ctx, socket, binary, args, pipe, false)
 		}
 		_, err = saveCodexAppPipe(dir, pipe)
 		if err != nil {
@@ -417,8 +470,38 @@ func (a *ACPAgent) connectCodexAppBridgeLocked(ctx context.Context, socket, bina
 				return nil, err
 			}
 		}
+		if pending != nil {
+			if pending.Host == nil {
+				_ = conn.Close()
+				return nil, fmt.Errorf("Codex App 初始化 Host 身份尚未确认")
+			}
+			if err := os.Remove(codexAppBootstrapPath(socket)); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+		}
 		return conn, nil
 	}
+	// App's early config reader must reuse the last complete launch settings,
+	// when available, rather than resetting a confirmed Host to bootstrap args.
+	if bootstrap {
+		if data, err := securefile.Read(argsPath); err == nil {
+			var prior []string
+			if json.Unmarshal(data, &prior) != nil {
+				return nil, fmt.Errorf("已保存的 Codex App 启动配置无效")
+			}
+			if codexAppHasConfiguration(prior) && slices.Equal(codexAppBootstrapArgs(prior), codexAppBootstrapArgs(args)) {
+				args = prior
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return a.startCodexAppBridgeConfiguredLocked(ctx, socket, binary, args, pipe, bootstrap)
+}
+
+func (a *ACPAgent) startCodexAppBridgeConfiguredLocked(ctx context.Context, socket, binary string, args []string, pipe string, bootstrap bool) (*websocket.Conn, error) {
+	dir := codexAppBridgeDirectory(socket)
 	if err := a.preflightCodexHostConflicts(ctx, 0); err != nil {
 		return nil, err
 	}
@@ -428,11 +511,14 @@ func (a *ACPAgent) connectCodexAppBridgeLocked(ctx context.Context, socket, bina
 	if _, err := saveCodexAppPipe(dir, pipe); err != nil {
 		return nil, err
 	}
+	if err := writeCodexAppBootstrap(socket, nil); err != nil {
+		return nil, err
+	}
 	data, err := json.Marshal(args)
 	if err != nil {
 		return nil, err
 	}
-	if err := securefile.Write(argsPath, data); err != nil {
+	if err := securefile.Write(filepath.Join(dir, "app-args.json"), data); err != nil {
 		return nil, err
 	}
 	conn, err := a.startCodexAppSharedHostLocked(ctx, socket, binary, args)
@@ -445,6 +531,20 @@ func (a *ACPAgent) connectCodexAppBridgeLocked(ctx context.Context, socket, bina
 			_ = conn.Close()
 			return nil, err
 		}
+	}
+	if bootstrap {
+		metadata, err := a.readCodexHostMetadata(socket)
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		if err := writeCodexAppBootstrap(socket, &metadata); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+	} else if err := os.Remove(codexAppBootstrapPath(socket)); err != nil {
+		_ = conn.Close()
+		return nil, err
 	}
 	return conn, nil
 }
@@ -482,6 +582,13 @@ func (a *ACPAgent) restartCodexAppSharedClientLocked(ctx context.Context, socket
 	if err != nil {
 		return 0, err
 	}
+	if pending, err := a.readCodexAppBootstrap(socket); err != nil {
+		_ = conn.Close()
+		return 0, err
+	} else if pending != nil {
+		_ = conn.Close()
+		return 0, fmt.Errorf("Codex App 共享配置尚未完成，请打开 App 后重试")
+	}
 	if err := a.attachCodexHostConnection(conn); err != nil {
 		_ = conn.Close()
 		return 0, err
@@ -514,6 +621,19 @@ func (a *ACPAgent) startCodexAppSharedHostLocked(ctx context.Context, socket, bi
 	command.Env, err = mergeEnv(os.Environ(), a.env)
 	if err != nil {
 		return nil, err
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, codexAppToolsEnabledKey) || strings.HasPrefix(arg, codexAppReviewEnabledKey) {
+			launcher, err := writeCodexAppMCPNodeLauncher(dir)
+			if err != nil {
+				return nil, err
+			}
+			command.Env, err = mergeEnv(command.Env, map[string]string{"CODEX_MCP_NODE_PATH": launcher})
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
 	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -588,10 +708,20 @@ func (a *ACPAgent) startCodexAppSharedHostLocked(ctx context.Context, socket, bi
 }
 
 func relayCodexAppBridge(ctx context.Context, conn *websocket.Conn, input io.Reader, output io.Writer) error {
+	return relayCodexAppBridgeFiltered(ctx, conn, input, output, nil)
+}
+
+func relayCodexAppBridgeFiltered(ctx context.Context, conn *websocket.Conn, input io.Reader, output io.Writer, validate func([]byte) error) error {
 	done := make(chan error, 2)
 	go func() {
 		scanner := newACPScanner(input)
 		for scanner.Scan() {
+			if validate != nil {
+				if err := validate(scanner.Bytes()); err != nil {
+					done <- err
+					return
+				}
+			}
 			if err := conn.WriteMessage(websocket.TextMessage, scanner.Bytes()); err != nil {
 				done <- err
 				return
@@ -641,7 +771,7 @@ func reloadCodexAppMCP(ctx context.Context, socket string) error {
 		Params any
 	}{
 		{"initialize", codexInitializeParams()},
-		{"config/mcpServer/reload", map[string]any{}},
+		{"config/mcpServer/reload", nil},
 	} {
 		if err := conn.WriteJSON(map[string]any{"id": i + 1, "method": request.Method, "params": request.Params}); err != nil {
 			return err
