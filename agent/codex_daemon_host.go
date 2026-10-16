@@ -18,6 +18,7 @@ import (
 
 const (
 	codexHostModeAuto    = "auto"
+	codexHostModeNative  = "native"
 	codexHostModeDaemon  = "daemon"
 	codexHostModeManaged = "managed"
 	codexHostModeShared  = "shared"
@@ -55,7 +56,7 @@ func normalizeAgentCodexHostMode(mode string) string {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	mode = strings.ReplaceAll(mode, "-", "_")
 	switch mode {
-	case codexHostModeAuto, codexHostModeDaemon, codexHostModeManaged, codexHostModeShared:
+	case codexHostModeAuto, codexHostModeNative, codexHostModeDaemon, codexHostModeManaged, codexHostModeShared:
 		return mode
 	case "":
 		// Direct agent constructors predate host-mode configuration and are
@@ -67,38 +68,22 @@ func normalizeAgentCodexHostMode(mode string) string {
 	}
 }
 
-// resolveAgentCodexHostMode freezes auto mode at construction time. A custom
-// socket or run_as_user keeps the compatibility backend. Otherwise an existing
-// official socket or standalone install selects daemon; daemon failures never
-// fall back to a second Host in the same process.
+// resolveAgentCodexHostMode keeps custom sockets and user isolation on the
+// compatibility backend. Standard auto uses the official native client without
+// changing App startup or falling back to a second kind of Host.
 func (a *ACPAgent) resolveAgentCodexHostMode() string {
 	switch a.codexHostMode {
-	case codexHostModeDaemon, codexHostModeManaged, codexHostModeShared:
+	case codexHostModeNative, codexHostModeDaemon, codexHostModeManaged, codexHostModeShared:
 		return a.codexHostMode
 	}
 	if strings.TrimSpace(a.codexHostSocketSnapshot()) != "" || a.runAs.shouldIsolate() {
 		return codexHostModeManaged
 	}
-	if a.codexAppReuseDaemon != nil && *a.codexAppReuseDaemon && codexAppSharedHostAvailable() {
-		return codexHostModeShared
-	}
-	codexHome, err := codexauth.ResolveCodexHome(a.env, a.runAs.User)
-	if err != nil {
-		return codexHostModeManaged
-	}
-	socketPath := codexDaemonSocketPath(codexHome)
-	if info, statErr := os.Lstat(socketPath); statErr == nil &&
-		info.Mode()&os.ModeSymlink == 0 && info.Mode()&os.ModeSocket != 0 {
-		return codexHostModeDaemon
-	}
-	if codexDaemonStandaloneAvailable(codexHome) {
-		return codexHostModeDaemon
-	}
-	return codexHostModeManaged
+	return codexHostModeNative
 }
 
 func (a *ACPAgent) usesOfficialCodexDaemon() bool {
-	return a.codexHostMode == codexHostModeDaemon
+	return a.codexHostMode == codexHostModeDaemon || a.codexHostMode == codexHostModeNative
 }
 
 func codexDaemonSocketPath(codexHome string) string {
@@ -139,7 +124,7 @@ func resolveCodexDaemonManagedBinaryPath(codexHome string) (string, error) {
 
 func codexDaemonManagedBinaryPathMatches(codexHome, path string) bool {
 	clean := filepath.Clean(path)
-	for _, candidate := range codexDaemonManagedBinaryCandidates(codexHome) {
+	for _, candidate := range codexDaemonHostBinaryCandidates(codexHome) {
 		if clean == filepath.Clean(candidate) {
 			return true
 		}
@@ -147,13 +132,15 @@ func codexDaemonManagedBinaryPathMatches(codexHome, path string) bool {
 	return false
 }
 
-func codexDaemonPIDPath(codexHome string) string {
-	return filepath.Join(codexHome, "app-server-daemon", "app-server.pid")
+// The standalone CLI is the lifecycle entrypoint. New releases install the
+// daemon's executable in a separate managed package below the same CODEX_HOME.
+func codexDaemonHostBinaryCandidates(codexHome string) []string {
+	paths := codexDaemonManagedBinaryCandidates(codexHome)
+	return append(paths, filepath.Join(codexHome, "packages", "app-server-daemon", "current", "bin", "codex"))
 }
 
-func codexDaemonStandaloneAvailable(codexHome string) bool {
-	_, err := resolveCodexDaemonManagedBinaryPath(codexHome)
-	return err == nil
+func codexDaemonPIDPath(codexHome string) string {
+	return filepath.Join(codexHome, "app-server-daemon", "app-server.pid")
 }
 
 func (a *ACPAgent) resolveCodexDaemonLifecycleCommand() (string, error) {
@@ -528,16 +515,13 @@ func (a *ACPAgent) recordCodexDaemonMetadata(
 	if err != nil {
 		return codexHostMetadata{}, err
 	}
-	expectedManagedPath, err := resolveCodexDaemonManagedBinaryPath(codexHome)
-	if err != nil {
-		return codexHostMetadata{}, err
-	}
-	if filepath.Clean(output.ManagedCodexPath) != expectedManagedPath {
+	expectedManagedPath := filepath.Clean(output.ManagedCodexPath)
+	if !codexDaemonManagedBinaryPathMatches(codexHome, expectedManagedPath) {
 		return codexHostMetadata{}, fmt.Errorf(
 			"%w: managed Codex path=%s, expected=%s",
 			errCodexDaemonUnmanaged,
 			output.ManagedCodexPath,
-			expectedManagedPath,
+			strings.Join(codexDaemonHostBinaryCandidates(codexHome), " or "),
 		)
 	}
 	record, err := a.readCodexDaemonPIDRecordForSocket(codexHome, socketPath)
@@ -677,7 +661,7 @@ func (a *ACPAgent) verifyCodexDaemonStopped(
 	if err != nil {
 		return err
 	}
-	record, recordErr := a.readCodexDaemonPIDRecord(codexDaemonPIDPath(codexHome))
+	record, recordErr := a.readCodexDaemonLifecyclePIDRecord(codexHome)
 	switch {
 	case recordErr == nil:
 		if record.PID == expected.PID && sameCodexProcessStart(record.ProcessStartTime, expected.ProcessStart) {
@@ -706,6 +690,28 @@ func (a *ACPAgent) verifyCodexDaemonStopped(
 		)
 	}
 	return nil
+}
+
+func (a *ACPAgent) readCodexDaemonLifecyclePIDRecord(codexHome string) (codexDaemonPIDRecord, error) {
+	paths := []string{codexDaemonPIDPath(codexHome), filepath.Join(codexHome, "app-server-daemon", "daemon.pid")}
+	var found codexDaemonPIDRecord
+	for _, path := range paths {
+		record, err := a.readCodexDaemonPIDRecord(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return codexDaemonPIDRecord{}, err
+		}
+		if found.PID != 0 && (found.PID != record.PID || !sameCodexProcessStart(found.ProcessStartTime, record.ProcessStartTime)) {
+			return codexDaemonPIDRecord{}, fmt.Errorf("%w: conflicting official daemon PID records", errCodexDaemonUnmanaged)
+		}
+		found = record
+	}
+	if found.PID == 0 {
+		return found, fmt.Errorf("read official Codex daemon pid record: %w", os.ErrNotExist)
+	}
+	return found, nil
 }
 
 func (a *ACPAgent) readCodexDaemonPIDRecord(path string) (codexDaemonPIDRecord, error) {
@@ -749,7 +755,7 @@ func (a *ACPAgent) readCodexDaemonPIDRecordForSocket(
 	codexHome string,
 	socketPath string,
 ) (codexDaemonPIDRecord, error) {
-	record, err := a.readCodexDaemonPIDRecord(codexDaemonPIDPath(codexHome))
+	record, err := a.readCodexDaemonLifecyclePIDRecord(codexHome)
 	if err == nil || !errors.Is(err, os.ErrNotExist) {
 		return record, err
 	}

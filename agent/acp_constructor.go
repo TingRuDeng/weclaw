@@ -117,9 +117,9 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		protocolTrace:              cfg.ProtocolTrace,
 	}
 	a.codexHostMode = a.resolveAgentCodexHostMode()
-	if a.codexHostMode == codexHostModeShared {
-		// App is another socket client; private Desktop ownership/IPC no
-		// longer participates in routing or release in this topology.
+	if a.codexHostMode == codexHostModeShared || a.codexHostMode == codexHostModeNative {
+		// Native/shared protocol clients do not route through private Desktop
+		// ownership or IPC. An independent App may use its own transport.
 		a.codexDesktopCoordination = false
 		a.codexDesktopHostSelection = false
 	}
@@ -152,7 +152,7 @@ func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
 		probe = newSystemCodexDesktopRuntime()
 	}
 	a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
-	if a.codexHostMode == codexHostModeShared {
+	if a.codexHostMode == codexHostModeShared || a.codexHostMode == codexHostModeNative {
 		a.codexOwners.enforceControl = false
 	}
 	if probe == nil {

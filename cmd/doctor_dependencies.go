@@ -111,16 +111,17 @@ func checkCodexStandalone(cfg *config.Config, deps doctorDeps) doctorResult {
 	if deps.codexHome != nil {
 		codexHome = strings.TrimSpace(deps.codexHome(cfg))
 	}
-	path := filepath.Join(codexHome, "packages", "standalone", "current", "codex")
-	info, err := os.Stat(path)
-	if codexHome != "" && err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+	if path := doctorStandaloneCodexPath(codexHome); path != "" {
 		result.Status = doctorOK
 		result.Detail = path
 		return result
 	}
 	result.Status = doctorWarn
-	result.Detail = "未安装官方 standalone；auto 将使用 WeClaw-managed Host，受控 CLI 需先启动 WeClaw"
-	if agentConfig.EffectiveCodexMultiFrontend() {
+	result.Detail = "未安装官方 standalone；运行 weclaw doctor --fix --components codex"
+	if agentConfig.UsesNativeCodexClient() {
+		result.Status = doctorFail
+		result.Detail = "native 原生客户端需要官方 standalone；Codex 请求前请运行 weclaw doctor --fix --components codex，服务仍可启动"
+	} else if agentConfig.EffectiveCodexMultiFrontend() {
 		result.Status = doctorFail
 		result.Detail = "codex_multi_frontend=true 需要官方 standalone；运行 weclaw doctor --fix --components codex"
 	} else if mode == "daemon" || mode == "shared" {
@@ -128,6 +129,19 @@ func checkCodexStandalone(cfg *config.Config, deps doctorDeps) doctorResult {
 		result.Detail = "codex_host_mode=" + mode + " 需要官方 standalone；运行 weclaw doctor --fix --components codex"
 	}
 	return result
+}
+
+func doctorStandaloneCodexPath(codexHome string) string {
+	if codexHome == "" || !filepath.IsAbs(codexHome) {
+		return ""
+	}
+	current := filepath.Join(codexHome, "packages", "standalone", "current")
+	for _, path := range []string{filepath.Join(current, "bin", "codex"), filepath.Join(current, "codex")} {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return path
+		}
+	}
+	return ""
 }
 
 func configuredNativeCodexCommand(cfg *config.Config) (string, bool) {

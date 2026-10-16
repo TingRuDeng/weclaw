@@ -121,7 +121,7 @@ func TestDoctorDependenciesRequireStandaloneForDaemonMode(t *testing.T) {
 	}
 }
 
-func TestDoctorDependenciesRequireStandaloneForMultiFrontend(t *testing.T) {
+func TestDoctorDependenciesRequireStandaloneForNativeClient(t *testing.T) {
 	codexHome := t.TempDir()
 	var cfg config.Config
 	if err := json.Unmarshal([]byte(`{
@@ -140,8 +140,8 @@ func TestDoctorDependenciesRequireStandaloneForMultiFrontend(t *testing.T) {
 	deps.codexHome = func(*config.Config) string { return codexHome }
 
 	result, ok := findResult(checkDoctorDependencies(&cfg, deps), "Codex standalone daemon")
-	if !ok || result.Status != doctorFail || !containsAll(result.Detail, "codex_multi_frontend", "--components codex") {
-		t.Fatalf("result=%#v ok=%t, want blocking multi-frontend standalone requirement", result, ok)
+	if !ok || result.Status != doctorFail || !containsAll(result.Detail, "native", "--components codex") {
+		t.Fatalf("result=%#v ok=%t, want native standalone requirement", result, ok)
 	}
 }
 

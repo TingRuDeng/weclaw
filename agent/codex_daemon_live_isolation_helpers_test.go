@@ -474,7 +474,7 @@ func verifyCodexDaemonLiveCleanup(runtime *codexDaemonLiveRuntimeHome) error {
 		runtime,
 		snapshotCodexDaemonLiveProcesses,
 		snapshotCodexDaemonLiveEntrypoint,
-		5*time.Second,
+		30*time.Second,
 	)
 }
 

@@ -1,6 +1,6 @@
 module github.com/fastclaw-ai/weclaw
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/google/uuid v1.6.0

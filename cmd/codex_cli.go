@@ -64,11 +64,6 @@ func init() {
 }
 
 func runCodexCLI(ctx context.Context, args []string) error {
-	frontendLease, err := agent.AcquireCodexCLIFrontendLease()
-	if err != nil {
-		return fmt.Errorf("无法启动受控 Codex CLI: %w", err)
-	}
-	defer frontendLease.Close()
 	cfg, err := loadCodexCLIConfig()
 	if err != nil {
 		return fmt.Errorf("加载配置失败: %w", err)
@@ -78,13 +73,24 @@ func runCodexCLI(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	native := codexConfig.UsesNativeCodexClient()
+	if !native {
+		frontendLease, err := agent.AcquireCodexCLIFrontendLease()
+		if err != nil {
+			return fmt.Errorf("无法启动受控 Codex CLI: %w", err)
+		}
+		defer frontendLease.Close()
+	}
 	cwd, err := codexCLIGetwd()
 	if err != nil {
 		return fmt.Errorf("读取当前工作目录失败: %w", err)
 	}
-	allowHostStart, err := codexCLIHostStartAllowed()
-	if err != nil {
-		return err
+	allowHostStart := true
+	if !native {
+		allowHostStart, err = codexCLIHostStartAllowed()
+		if err != nil {
+			return err
+		}
 	}
 	var serviceHost agent.CodexCLIHost
 	if !allowHostStart {

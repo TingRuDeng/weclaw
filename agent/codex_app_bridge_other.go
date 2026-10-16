@@ -20,3 +20,7 @@ func configureSystemCodexAppShared(context.Context, string, codexAppDaemonEnviro
 }
 
 func restoreSystemCodexAppSharedEnvironment(context.Context, string) error { return nil }
+
+func openSystemNativeCodexApp(context.Context) error {
+	return fmt.Errorf("请通过本机桌面环境直接打开官方 Codex App")
+}

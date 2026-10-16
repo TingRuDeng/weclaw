@@ -83,7 +83,7 @@ type AgentConfig struct {
 	Progress           *ProgressConfig   `json:"progress,omitempty"`               // 微信进度反馈配置
 	AutoLaunch         *bool             `json:"auto_launch,omitempty"`            // companion 是否自动打开本地可见终端
 	AppServerSocket    string            `json:"app_server_socket,omitempty"`      // Codex 单一 app-server 的共享 Unix socket
-	CodexHostMode      string            `json:"codex_host_mode,omitempty"`        // Codex Host：auto / daemon / managed / shared
+	CodexHostMode      string            `json:"codex_host_mode,omitempty"`        // Codex Host：auto / native / daemon / managed / shared
 	CodexMultiFrontend *bool             `json:"codex_multi_frontend,omitempty"`   // Codex App、受控 CLI 与消息平台是否强制共享同一官方服务
 	CodexAutoUpdate    string            `json:"codex_auto_update,omitempty"`      // Codex CLI 自动更新：off / incompatible
 	CodexAppDaemon     *bool             `json:"codex_app_reuse_daemon,omitempty"` // macOS Codex App 是否复用官方 daemon；nil 表示不管理
@@ -169,8 +169,7 @@ func (c AgentConfig) ValidateCodexAutoUpdateConfig() error {
 	}
 }
 
-// EffectiveCodexHostMode 返回 Codex Host 生命周期策略。auto 由运行时选择
-// macOS App 共享适配或 standalone daemon；显式模式不静默切换 Host。
+// EffectiveCodexHostMode 返回 Codex 接入策略；标准 auto 使用原生客户端。
 func (c AgentConfig) EffectiveCodexHostMode() string {
 	mode := normalizeCodexHostMode(c.CodexHostMode)
 	if mode == "" {
@@ -179,11 +178,22 @@ func (c AgentConfig) EffectiveCodexHostMode() string {
 	return mode
 }
 
-// EffectiveCodexMultiFrontend 返回是否在平台启动前准备唯一共享服务。
-// 标准原生 Codex 配置会由 NormalizeCodexRemoteFirst 显式写入 true；
-// 这里保留 nil 的兼容语义，避免影响未经过规范化的嵌入方配置。
+// EffectiveCodexMultiFrontend retains the explicit legacy sharing gate;
+// native clients preserve the raw flag without enforcing a global topology.
 func (c AgentConfig) EffectiveCodexMultiFrontend() bool {
+	if c.UsesNativeCodexClient() {
+		return false
+	}
 	return boolValueDefault(c.CodexMultiFrontend, false)
+}
+
+// UsesNativeCodexClient identifies the default protocol client without App
+// startup or global Host ownership. Legacy hints remain round-trip compatible.
+func (c AgentConfig) UsesNativeCodexClient() bool {
+	mode := c.EffectiveCodexHostMode()
+	return c.Type == "acp" && isNativeCodexAppServerConfig(c) &&
+		(mode == "auto" || mode == "native") &&
+		strings.TrimSpace(c.AppServerSocket) == "" && strings.TrimSpace(c.RunAsUser) == ""
 }
 
 // ValidateCodexMultiFrontendConfig 拒绝会让共享意图降级或分裂 Host 的组合。
@@ -219,7 +229,7 @@ func (c AgentConfig) ValidateCodexHostModeConfig() error {
 	switch mode := c.EffectiveCodexHostMode(); mode {
 	case "auto", "managed":
 		return nil
-	case "daemon", "shared":
+	case "native", "daemon", "shared":
 		if mode == "shared" && c.CodexAppDaemon != nil && !*c.CodexAppDaemon {
 			return fmt.Errorf("codex_host_mode shared cannot disable codex_app_reuse_daemon")
 		}
@@ -231,14 +241,15 @@ func (c AgentConfig) ValidateCodexHostModeConfig() error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("invalid codex_host_mode %q: use auto, daemon, managed, or shared", c.CodexHostMode)
+		return fmt.Errorf("invalid codex_host_mode %q: use auto, native, daemon, managed, or shared", c.CodexHostMode)
 	}
 }
 
-// EffectiveCodexAppDaemon 返回是否由 WeClaw 协调 macOS Codex App
-// 连接官方 daemon。nil 保留嵌入方的既有行为；原生 Codex 配置会在规范化时
-// 显式写入推荐值。
+// EffectiveCodexAppDaemon enables App startup management only in legacy modes.
 func (c AgentConfig) EffectiveCodexAppDaemon() bool {
+	if c.UsesNativeCodexClient() {
+		return false
+	}
 	return c.EffectiveCodexMultiFrontend() || boolValueDefault(c.CodexAppDaemon, false)
 }
 

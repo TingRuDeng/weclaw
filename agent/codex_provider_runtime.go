@@ -47,6 +47,11 @@ func (a *ACPAgent) prepareCodexThreadProviderLocked(ctx context.Context, req Cod
 		return result, err
 	}
 	result.Provider = provider
+	if a.codexHostMode == codexHostModeNative {
+		// Native resume owns provider compatibility. Never rewrite history or
+		// restart the user's execution service as a side effect of selection.
+		return result, nil
+	}
 	if req.PendingFirstTurn {
 		a.rememberCodexThreadProvider(threadID, provider)
 		return result, nil

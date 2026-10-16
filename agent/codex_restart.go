@@ -108,6 +108,9 @@ func (a *ACPAgent) PrepareCodexRestartWithOptions(
 	}
 	a.codexRestartMu.Unlock()
 
+	if a.codexHostMode == codexHostModeNative && !opts.ForceTerminateCodex && !opts.StopConflictingCodexHosts {
+		return a.prepareNativeCodexRestartLocked(persistIntent)
+	}
 	gate := a.ensureCodexAppServerGate()
 	beginExclusive := gate.beginExclusive
 	if opts.ForceTerminateCodex {
@@ -486,6 +489,13 @@ func (a *ACPAgent) CancelCodexRestart(ctx context.Context) error {
 	}
 	a.codexAdmissionMu.Lock()
 	defer a.codexAdmissionMu.Unlock()
+	if a.codexHostMode == codexHostModeNative && !previous.HostStopped {
+		a.ensureCodexAppServerGate().finishRestart(true)
+		a.codexRestartMu.Lock()
+		a.codexRestartPrepared = false
+		a.codexRestartMu.Unlock()
+		return nil
+	}
 	if err := a.requireCodexDesktopAbsent(); err != nil {
 		return err
 	}
@@ -509,6 +519,10 @@ func (a *ACPAgent) VerifyCodexRestart(ctx context.Context, previous CodexRestart
 	}
 	a.codexAdmissionMu.Lock()
 	defer a.codexAdmissionMu.Unlock()
+	if a.codexHostMode == codexHostModeNative && !previous.HostStopped {
+		a.ensureCodexAppServerGate().finishRestart(true)
+		return CodexRestartSnapshot{HostMode: codexHostModeNative}, nil
+	}
 	topologyChanged, err := a.codexRestartTopologyChanged(previous)
 	if err != nil {
 		return CodexRestartSnapshot{}, err
@@ -522,7 +536,7 @@ func (a *ACPAgent) VerifyCodexRestart(ctx context.Context, previous CodexRestart
 			ErrCodexRuntimeUnavailable,
 		)
 	}
-	allowDaemonFrontend := (topologyChanged && a.usesOfficialCodexDaemon()) || a.codexHostMode == codexHostModeShared
+	allowDaemonFrontend := (topologyChanged && a.usesOfficialCodexDaemon()) || a.codexHostMode == codexHostModeShared || a.codexHostMode == codexHostModeNative
 	if !allowDaemonFrontend {
 		if err := a.requireCodexDesktopAbsent(); err != nil {
 			return CodexRestartSnapshot{}, err
@@ -585,6 +599,9 @@ func (a *ACPAgent) verifyStartedCodexHost(
 	}
 	if !previous.HostStopped || previous.HostGeneration == 0 || current.HostGeneration != previous.HostGeneration {
 		return current, nil
+	}
+	if a.codexHostMode == codexHostModeNative {
+		return CodexRestartSnapshot{}, fmt.Errorf("%w: 旧停止记录对应的官方服务仍在运行；请显式使用 --force 收敛", ErrCodexRestartUnsafe)
 	}
 	if err := a.replaceStaleCodexHostGeneration(ctx, previous); err != nil {
 		return CodexRestartSnapshot{}, err

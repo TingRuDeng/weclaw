@@ -407,9 +407,7 @@ func doctorStandaloneCodexAvailable(cfg *config.Config) bool {
 	if codexHome == "" || !filepath.IsAbs(codexHome) {
 		return false
 	}
-	path := filepath.Join(codexHome, "packages", "standalone", "current", "codex")
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+	return doctorStandaloneCodexPath(codexHome) != ""
 }
 
 func pinDoctorStandaloneCodexCommand(cfg *config.Config, installDir string, components []doctorComponent) (bool, error) {

@@ -877,6 +877,11 @@ func (plan codexHostConflictPlan) conflictError() error {
 }
 
 func (a *ACPAgent) preflightCodexHostConflicts(ctx context.Context, authorityPID int) error {
+	// A native client validates its selected daemon separately. Other App/CLI
+	// processes are not a global conflict; per-thread admission belongs upstream.
+	if a.codexHostMode == codexHostModeNative {
+		return nil
+	}
 	if a.codexHostConflictPreflightCall != nil {
 		return a.codexHostConflictPreflightCall(ctx, authorityPID)
 	}

@@ -473,7 +473,7 @@ func TestCodexDaemonStopRejectsGenerationCreatedDuringStop(t *testing.T) {
 	}
 }
 
-func TestCodexHostAutoModeUsesStandaloneDaemonOnlyWhenAvailable(t *testing.T) {
+func TestCodexHostAutoModeSelectsNativeRegardlessOfInstall(t *testing.T) {
 	t.Run("standalone available", func(t *testing.T) {
 		home := t.TempDir()
 		binary := codexDaemonManagedBinaryPath(home)
@@ -487,8 +487,8 @@ func TestCodexHostAutoModeUsesStandaloneDaemonOnlyWhenAvailable(t *testing.T) {
 			Command: "codex", Args: []string{"app-server"}, CodexHostMode: "auto",
 			Env: map[string]string{"CODEX_HOME": home},
 		})
-		if a.codexHostMode != codexHostModeDaemon {
-			t.Fatalf("mode=%q, want daemon", a.codexHostMode)
+		if a.codexHostMode != codexHostModeNative {
+			t.Fatalf("mode=%q, want native", a.codexHostMode)
 		}
 	})
 
@@ -497,8 +497,8 @@ func TestCodexHostAutoModeUsesStandaloneDaemonOnlyWhenAvailable(t *testing.T) {
 			Command: "codex", Args: []string{"app-server"}, CodexHostMode: "auto",
 			Env: map[string]string{"CODEX_HOME": t.TempDir()},
 		})
-		if a.codexHostMode != codexHostModeManaged {
-			t.Fatalf("mode=%q, want managed compatibility backend", a.codexHostMode)
+		if a.codexHostMode != codexHostModeNative {
+			t.Fatalf("mode=%q, want native with explicit missing-install errors", a.codexHostMode)
 		}
 	})
 
@@ -517,8 +517,8 @@ func TestCodexHostAutoModeUsesStandaloneDaemonOnlyWhenAvailable(t *testing.T) {
 			Command: "codex", Args: []string{"app-server"}, CodexHostMode: "auto",
 			Env: map[string]string{"CODEX_HOME": home},
 		})
-		if a.codexHostMode != codexHostModeDaemon {
-			t.Fatalf("mode=%q, want daemon", a.codexHostMode)
+		if a.codexHostMode != codexHostModeNative {
+			t.Fatalf("mode=%q, want native", a.codexHostMode)
 		}
 	})
 }

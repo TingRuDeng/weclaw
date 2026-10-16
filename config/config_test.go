@@ -300,6 +300,7 @@ func TestAgentConfigCodexAppDaemon(t *testing.T) {
 				"type": "acp",
 				"command": "codex",
 				"args": ["app-server"],
+				"codex_host_mode": "daemon",
 				"codex_app_reuse_daemon": true
 			}
 		}
@@ -324,6 +325,7 @@ func TestCodexMultiFrontendSelectsPlatformSharedHost(t *testing.T) {
 				"type": "acp",
 				"command": "codex",
 				"args": ["app-server", "--listen", "stdio://"],
+				"codex_host_mode": "daemon",
 				"codex_multi_frontend": true
 			}
 		}
@@ -332,8 +334,8 @@ func TestCodexMultiFrontendSelectsPlatformSharedHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	agentCfg := cfg.Agents["codex"]
-	if got := agentCfg.EffectiveCodexHostMode(); got != "auto" {
-		t.Fatalf("EffectiveCodexHostMode()=%q, want platform-specific shared Host selection", got)
+	if got := agentCfg.EffectiveCodexHostMode(); got != "daemon" {
+		t.Fatalf("EffectiveCodexHostMode()=%q, want explicit daemon", got)
 	}
 	if !agentCfg.EffectiveCodexAppDaemon() {
 		t.Fatal("multi-frontend sharing must enable Codex App daemon reuse")
@@ -349,7 +351,7 @@ func TestValidateRejectsCodexMultiFrontendConflicts(t *testing.T) {
 		"managed":            `"command":"codex","args":["app-server"],"codex_host_mode":"managed"`,
 		"custom socket":      `"command":"codex","args":["app-server"],"app_server_socket":"/tmp/codex.sock"`,
 		"run as user":        `"command":"codex","args":["app-server"],"run_as_user":"codex"`,
-		"app reuse disabled": `"command":"codex","args":["app-server"],"codex_app_reuse_daemon":false`,
+		"app reuse disabled": `"command":"codex","args":["app-server"],"codex_host_mode":"daemon","codex_app_reuse_daemon":false`,
 	}
 	for name, fields := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -499,15 +501,15 @@ func TestNormalizeCodexRemoteFirstEnablesControlledUpdateForExistingSharedHost(t
 	if got := cfg.Agents["codex"].CodexAutoUpdate; got != "incompatible" {
 		t.Fatalf("CodexAutoUpdate=%q, want incompatible", got)
 	}
-	if got := cfg.Agents["codex"].CodexAppDaemon; got == nil || !*got {
-		t.Fatalf("CodexAppDaemon=%v, want true", got)
+	if got := cfg.Agents["codex"].CodexAppDaemon; got != nil {
+		t.Fatalf("CodexAppDaemon=%v, want no implicit App override", got)
 	}
 	if NormalizeCodexRemoteFirst(cfg) {
 		t.Fatal("second NormalizeCodexRemoteFirst() = true, want idempotent")
 	}
 }
 
-func TestNormalizeCodexRemoteFirstEnablesMultiFrontendByDefault(t *testing.T) {
+func TestNormalizeCodexRemoteFirstLeavesNativeFrontendDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Agents["codex"] = AgentConfig{
 		Type: "acp", Command: "codex",
@@ -518,18 +520,18 @@ func TestNormalizeCodexRemoteFirstEnablesMultiFrontendByDefault(t *testing.T) {
 		t.Fatal("NormalizeCodexRemoteFirst() = false, want shared frontend defaults")
 	}
 	got := cfg.Agents["codex"]
-	if got.CodexMultiFrontend == nil || !*got.CodexMultiFrontend {
-		t.Fatalf("CodexMultiFrontend=%v, want true for native shared app-server", got.CodexMultiFrontend)
+	if got.CodexMultiFrontend != nil {
+		t.Fatalf("CodexMultiFrontend=%v, want no implicit sharing flag", got.CodexMultiFrontend)
 	}
-	if got.CodexAppDaemon == nil || !*got.CodexAppDaemon {
-		t.Fatalf("CodexAppDaemon=%v, want true with multi-frontend default", got.CodexAppDaemon)
+	if got.CodexAppDaemon != nil || !got.UsesNativeCodexClient() {
+		t.Fatalf("native defaults not preserved: %#v", got)
 	}
 	if got.EffectiveCodexHostMode() != "auto" {
 		t.Fatalf("EffectiveCodexHostMode()=%q, want platform-specific shared Host selection with multi-frontend default", got.EffectiveCodexHostMode())
 	}
 }
 
-func TestNormalizeCodexRemoteFirstEnablesMultiFrontendWithExistingAppDaemon(t *testing.T) {
+func TestNormalizeCodexRemoteFirstPreservesExistingAppDaemonFlag(t *testing.T) {
 	enabled := true
 	cfg := DefaultConfig()
 	cfg.Agents["codex"] = AgentConfig{
@@ -541,8 +543,8 @@ func TestNormalizeCodexRemoteFirstEnablesMultiFrontendWithExistingAppDaemon(t *t
 		t.Fatal("NormalizeCodexRemoteFirst() = false, want multi-frontend default")
 	}
 	got := cfg.Agents["codex"]
-	if got.CodexMultiFrontend == nil || !*got.CodexMultiFrontend {
-		t.Fatalf("CodexMultiFrontend=%v, want true when App daemon reuse is enabled", got.CodexMultiFrontend)
+	if got.CodexMultiFrontend != nil || got.CodexAppDaemon == nil || !*got.CodexAppDaemon || got.EffectiveCodexAppDaemon() {
+		t.Fatalf("legacy flag must round-trip without enabling native App reuse: %#v", got)
 	}
 }
 
@@ -553,14 +555,14 @@ func TestNormalizeCodexRemoteFirstKeepsExplicitUpdatePolicy(t *testing.T) {
 		CodexAutoUpdate: "off",
 	}
 
-	if !NormalizeCodexRemoteFirst(cfg) {
-		t.Fatal("NormalizeCodexRemoteFirst() must add the App daemon reuse default")
+	if NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("explicit update policy must remain unchanged")
 	}
 	if got := cfg.Agents["codex"].CodexAutoUpdate; got != "off" {
 		t.Fatalf("CodexAutoUpdate=%q, want off", got)
 	}
-	if got := cfg.Agents["codex"].CodexAppDaemon; got == nil || !*got {
-		t.Fatalf("CodexAppDaemon=%v, want true", got)
+	if got := cfg.Agents["codex"].CodexAppDaemon; got != nil {
+		t.Fatalf("CodexAppDaemon=%v, want no implicit App override", got)
 	}
 	if NormalizeCodexRemoteFirst(cfg) {
 		t.Fatal("second NormalizeCodexRemoteFirst() = true, want idempotent")
@@ -590,12 +592,12 @@ func TestNormalizeCodexRemoteFirstHonorsMultiFrontendOptOut(t *testing.T) {
 		CodexAutoUpdate: "incompatible", CodexMultiFrontend: &disabled,
 	}
 
-	if !NormalizeCodexRemoteFirst(cfg) {
-		t.Fatal("NormalizeCodexRemoteFirst() must persist the App daemon opt-out")
+	if NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("explicit opt-out must remain unchanged")
 	}
 	got := cfg.Agents["codex"]
-	if got.CodexAppDaemon == nil || *got.CodexAppDaemon {
-		t.Fatalf("CodexAppDaemon=%v, want false when multi-frontend sharing is explicitly disabled", got.CodexAppDaemon)
+	if got.CodexAppDaemon != nil || got.CodexMultiFrontend == nil || *got.CodexMultiFrontend {
+		t.Fatalf("opt-out must be preserved without adding App overrides: %#v", got)
 	}
 	if NormalizeCodexRemoteFirst(cfg) {
 		t.Fatal("second NormalizeCodexRemoteFirst() = true, want idempotent")

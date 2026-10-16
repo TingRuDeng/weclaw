@@ -48,8 +48,8 @@ func TestACPAgentConfigFromConfigPassesCodexHostMode(t *testing.T) {
 	auto := acpAgentConfigFromConfig("codex", config.AgentConfig{
 		Type: "acp", Command: "codex", Args: []string{"app-server"},
 	})
-	if auto.CodexDesktopBridge != (runtime.GOOS == "darwin") {
-		t.Fatalf("CodexDesktopBridge=%v, want Darwin-only auto bridge", auto.CodexDesktopBridge)
+	if auto.CodexDesktopBridge {
+		t.Fatalf("CodexDesktopBridge=%v, want no native Desktop bridge", auto.CodexDesktopBridge)
 	}
 	custom := acpAgentConfigFromConfig("codex", config.AgentConfig{
 		Type: "acp", Command: "codex", Args: []string{"app-server"},
@@ -68,6 +68,7 @@ func TestACPAgentConfigFromConfigEnforcesMultiFrontendRuntime(t *testing.T) {
 				"type": "acp",
 				"command": "codex",
 				"args": ["app-server", "--listen", "stdio://"],
+				"codex_host_mode": "daemon",
 				"codex_multi_frontend": true
 			}
 		}
@@ -76,7 +77,7 @@ func TestACPAgentConfigFromConfigEnforcesMultiFrontendRuntime(t *testing.T) {
 	}
 
 	got := acpAgentConfigFromConfig("codex", cfg.Agents["codex"])
-	if got.CodexHostMode != "auto" {
+	if got.CodexHostMode != "daemon" {
 		t.Fatalf("CodexHostMode=%q, want platform-specific shared Host selection", got.CodexHostMode)
 	}
 	if got.CodexAppDaemon == nil || !*got.CodexAppDaemon {
@@ -89,7 +90,7 @@ func TestShouldWarmCodexAppDaemonReuse(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents["codex"] = config.AgentConfig{
 		Type: "acp", Command: "codex", Args: []string{"app-server"},
-		CodexHostMode: "auto", CodexAppDaemon: &enabled,
+		CodexHostMode: "daemon", CodexAppDaemon: &enabled,
 	}
 	if got, want := shouldWarmCodexAppDaemonReuse(cfg), runtime.GOOS == "darwin"; got != want {
 		t.Fatalf("shouldWarmCodexAppDaemonReuse()=%v, want %v", got, want)
@@ -118,7 +119,7 @@ func TestStartCodexAppDaemonReuseAgentFailsStrictSharingSynchronously(t *testing
 	cfg := config.DefaultConfig()
 	cfg.Agents["codex"] = config.AgentConfig{
 		Type: "acp", Command: "codex", Args: []string{"app-server"},
-		CodexMultiFrontend: &enabled,
+		CodexHostMode: "daemon", CodexMultiFrontend: &enabled,
 	}
 	starter := &failingCodexAgentStarter{err: wantErr}
 

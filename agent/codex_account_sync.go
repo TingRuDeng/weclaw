@@ -170,6 +170,10 @@ func (a *ACPAgent) ensureCodexAccountForTurn(ctx context.Context) error {
 	case CodexAccountSyncUnmanaged, CodexAccountSyncSynced:
 		return nil
 	case CodexAccountSyncPending, CodexAccountSyncRuntimeMismatch:
+		if a.codexHostMode == codexHostModeNative {
+			return codexauth.NewError(codexauth.CodeBusy,
+				"Codex 账号与当前执行服务不一致；请显式执行 weclaw codex account use <ID或标签>，普通消息不会重启官方服务", nil)
+		}
 		_, err := a.reconcileExternallyProjectedCodexAccount(ctx, 0)
 		if err != nil {
 			return err

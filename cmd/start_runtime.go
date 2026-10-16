@@ -277,6 +277,13 @@ func newStartHandlerWithTrace(cfg *config.Config, traceStore *observability.Stor
 	handler.SetVersion(Version)
 	handler.SetCDNDownloader(wechat.DownloadFileFromCDN)
 	handler.SetTraceRecorder(traceStore)
+	handler.SetCodexRestartFactory(func(name string) (agent.CodexRestartController, error) {
+		selected, ok := cfg.Agents[name]
+		if !ok || !selected.UsesNativeCodexClient() {
+			return nil, fmt.Errorf("原生 Codex 维护配置不可用")
+		}
+		return newACPAgentFromConfig(name, selected, protocolTrace), nil
+	})
 	configureHandlerMetadata(handler, cfg)
 	configureHandlerState(handler)
 	configureHandlerAccess(handler, cfg)
@@ -331,6 +338,7 @@ func configureHandlerMetadata(handler *messaging.Handler, cfg *config.Config) {
 		}
 		metas = append(metas, messaging.AgentMeta{
 			Name: name, Type: agCfg.Type, Command: command, Model: agCfg.Model, Effort: agCfg.Effort,
+			CodexNativeClient: agCfg.UsesNativeCodexClient(),
 		})
 		if agCfg.Cwd != "" {
 			workDirs[name] = agCfg.Cwd
@@ -392,6 +400,11 @@ func configureHandlerAudit(handler *messaging.Handler, cfg *config.Config) {
 // startDefaultAgent 后台初始化默认 Agent，使平台监听无需等待握手完成。
 func startDefaultAgent(ctx context.Context, handler *messaging.Handler, cfg *config.Config) <-chan struct{} {
 	done := make(chan struct{})
+	if selected, ok := cfg.Agents[cfg.DefaultAgent]; ok && selected.UsesNativeCodexClient() {
+		handler.SetDefaultAgentName(cfg.DefaultAgent)
+		close(done)
+		return done
+	}
 	go func() {
 		defer close(done)
 		if cfg.DefaultAgent == "" {

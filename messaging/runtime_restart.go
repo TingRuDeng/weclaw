@@ -50,6 +50,32 @@ type codexForceRestartController interface {
 	) (agent.CodexRestartSnapshot, error)
 }
 
+// SetCodexRestartFactory permits explicit native maintenance without first
+// starting the daemon that the operator is asking to terminate.
+func (h *Handler) SetCodexRestartFactory(factory func(string) (agent.CodexRestartController, error)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.codexRestartFactory = factory
+}
+
+func (h *Handler) codexRuntimeRestartController(ctx context.Context, name string) (agent.CodexRestartController, error) {
+	h.mu.RLock()
+	existing, factory := h.agents[name], h.codexRestartFactory
+	h.mu.RUnlock()
+	if existing == nil && factory != nil && h.codexNativeClientConfigured(name) {
+		return factory(name)
+	}
+	_, runtimeAgent, err := h.getCodexSessionAgent(ctx)
+	if err != nil {
+		return nil, err
+	}
+	controller, ok := runtimeAgent.(agent.CodexRestartController)
+	if !ok {
+		return nil, fmt.Errorf("当前 Codex Agent 不支持协调重启")
+	}
+	return controller, nil
+}
+
 // PrepareRuntimeRestart atomically closes message admission, drains tasks and
 // stops the verified Codex Host before the outer CLI replaces the service.
 func (h *Handler) PrepareRuntimeRestart(ctx context.Context, force bool) (RuntimeRestartResult, error) {
@@ -97,19 +123,13 @@ func (h *Handler) PrepareRuntimeRestartWithOptions(
 	}
 
 	var controller agent.CodexRestartController
-	if _, ok := h.codexAgentName(); ok {
-		_, runtimeAgent, agentErr := h.getCodexSessionAgent(ctx)
+	if name, ok := h.codexAgentName(); ok && (!h.codexNativeClientConfigured(name) || stopConflictingCodexHosts || forceTerminateCodex) {
+		var agentErr error
+		controller, agentErr = h.codexRuntimeRestartController(ctx, name)
 		if agentErr != nil {
 			h.CancelDrain()
 			_ = h.releaseRuntimeRestartLease()
 			return result, fmt.Errorf("%w: %w", ErrRuntimeRestartBlocked, agentErr)
-		}
-		var supported bool
-		controller, supported = runtimeAgent.(agent.CodexRestartController)
-		if !supported {
-			h.CancelDrain()
-			_ = h.releaseRuntimeRestartLease()
-			return result, fmt.Errorf("%w: 当前 Codex Agent 不支持协调重启", ErrRuntimeRestartBlocked)
 		}
 		preparing := runtimeRestartState{
 			Version: runtimeRestartStateVersion, PreparedAt: time.Now().UTC(), Codex: true,
@@ -133,7 +153,7 @@ func (h *Handler) PrepareRuntimeRestartWithOptions(
 		}
 		var snapshot agent.CodexRestartSnapshot
 		var prepareErr error
-		if optionsController, ok := runtimeAgent.(codexRestartOptionsController); ok {
+		if optionsController, ok := controller.(codexRestartOptionsController); ok {
 			snapshot, prepareErr = optionsController.PrepareCodexRestartWithOptions(
 				ctx,
 				persistIntent,
@@ -197,6 +217,17 @@ func (h *Handler) PrepareRuntimeRestartWithOptions(
 	h.runtimeRestartController = controller
 	h.runtimeRestartResult = result
 	return result, nil
+}
+
+func (h *Handler) codexNativeClientConfigured(name string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, meta := range h.agentMetas {
+		if meta.Name == name {
+			return meta.CodexNativeClient
+		}
+	}
+	return false
 }
 
 func (h *Handler) forceCompleteUnsafeRuntimeRestart(ctx context.Context) (RuntimeRestartResult, error) {

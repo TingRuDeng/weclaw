@@ -19,7 +19,7 @@ type codexAppDaemonReuseResult struct {
 // 启用必须等官方 daemon 已验证并可连接后再提交，避免 App 在 daemon 尚未就绪时
 // 回退到自己的 stdio app-server。
 func (a *ACPAgent) applyCodexAppDaemonReusePreference(ctx context.Context) error {
-	if a.protocol != protocolCodexAppServer {
+	if a.protocol != protocolCodexAppServer || a.codexHostMode == codexHostModeNative {
 		return nil
 	}
 	if a.codexHostMode != codexHostModeShared {
@@ -47,7 +47,7 @@ func (a *ACPAgent) applyCodexAppDaemonReusePreference(ctx context.Context) error
 // 后续启动的 App 连接 control socket。已经运行私有 app-server 的 App 不会被
 // WeClaw 退出；当前 Agent 失败关闭并要求用户重启 App。
 func (a *ACPAgent) ensureCodexAppReusesDaemon(ctx context.Context, socketPath string) error {
-	if !a.usesOfficialCodexDaemon() || a.codexAppReuseDaemon == nil || !*a.codexAppReuseDaemon {
+	if a.codexHostMode == codexHostModeNative || !a.usesOfficialCodexDaemon() || a.codexAppReuseDaemon == nil || !*a.codexAppReuseDaemon {
 		return nil
 	}
 	result, err := a.configureCodexAppDaemonReuse(ctx, true, socketPath)
@@ -63,7 +63,7 @@ func (a *ACPAgent) ensureCodexAppReusesDaemon(ctx context.Context, socketPath st
 // validateRunningCodexAppDaemonReuse 供晚启动 App 的拓扑调和调用。它只检查
 // 当前进程树与受保护 Desktop endpoint，不重复执行 launchctl 写操作。
 func (a *ACPAgent) validateRunningCodexAppDaemonReuse(ctx context.Context) error {
-	if !a.usesOfficialCodexDaemon() || a.codexAppReuseDaemon == nil || !*a.codexAppReuseDaemon {
+	if a.codexHostMode == codexHostModeNative || !a.usesOfficialCodexDaemon() || a.codexAppReuseDaemon == nil || !*a.codexAppReuseDaemon {
 		return nil
 	}
 	inspect := a.codexAppDaemonInspectCall

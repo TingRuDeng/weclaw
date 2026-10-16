@@ -17,6 +17,13 @@ type agentStartState struct {
 	err  error
 }
 
+// SetDefaultAgentName selects the default without starting its runtime.
+func (h *Handler) SetDefaultAgentName(name string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.defaultName = name
+}
+
 // SetDefaultAgent 设置已经启动完成的默认 agent。
 func (h *Handler) SetDefaultAgent(name string, ag agent.Agent) {
 	h.bindCodexThreadArchiveEvents(ag)

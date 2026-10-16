@@ -181,8 +181,8 @@ func openclawACPConfig(req openclawACPConfigRequest) AgentConfig {
 	}
 }
 
-// NormalizeCodexRemoteFirst 将旧 Codex Companion/exec 配置迁移到单一共享 app-server，
-// 并为标准原生 shared Host 写入多前端与受控自动更新默认值。
+// NormalizeCodexRemoteFirst 将旧 Codex Companion/exec 配置迁移到 app-server 协议，
+// 标准 auto 使用原生客户端，不默认修改 App 启动或强制多前端拓扑。
 func NormalizeCodexRemoteFirst(cfg *Config) bool {
 	if cfg == nil || cfg.Agents == nil {
 		return false
@@ -210,31 +210,6 @@ func NormalizeCodexRemoteFirst(cfg *Config) bool {
 		agCfg.CodexAutoUpdate = "incompatible"
 		modified = true
 		log.Printf("[config] enabled controlled Codex CLI updates for incompatible state runtimes")
-	}
-	if agCfg.Type == "acp" && isNativeCodexAppServerConfig(agCfg) &&
-		agCfg.CodexMultiFrontend == nil &&
-		(agCfg.CodexAppDaemon == nil || *agCfg.CodexAppDaemon) &&
-		(agCfg.EffectiveCodexHostMode() == "auto" || agCfg.EffectiveCodexHostMode() == "daemon") &&
-		strings.TrimSpace(agCfg.AppServerSocket) == "" && strings.TrimSpace(agCfg.RunAsUser) == "" {
-		enabled := true
-		agCfg.CodexMultiFrontend = &enabled
-		modified = true
-		log.Printf("[config] enabled Codex multi-frontend sharing through the platform-selected official Host")
-	}
-	if agCfg.Type == "acp" && isNativeCodexAppServerConfig(agCfg) &&
-		agCfg.CodexAppDaemon == nil && agCfg.CodexMultiFrontend != nil {
-		enabled := *agCfg.CodexMultiFrontend
-		agCfg.CodexAppDaemon = &enabled
-		modified = true
-		log.Printf("[config] aligned Codex App daemon reuse with codex_multi_frontend=%t", enabled)
-	} else if agCfg.Type == "acp" && isNativeCodexAppServerConfig(agCfg) &&
-		agCfg.CodexAppDaemon == nil &&
-		(agCfg.EffectiveCodexHostMode() == "auto" || agCfg.EffectiveCodexHostMode() == "daemon") &&
-		strings.TrimSpace(agCfg.AppServerSocket) == "" && strings.TrimSpace(agCfg.RunAsUser) == "" {
-		enabled := true
-		agCfg.CodexAppDaemon = &enabled
-		modified = true
-		log.Printf("[config] enabled Codex App reuse of the official daemon on macOS")
 	}
 	if modified {
 		cfg.Agents["codex"] = agCfg

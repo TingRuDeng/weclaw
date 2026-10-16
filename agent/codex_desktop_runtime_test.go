@@ -49,10 +49,10 @@ func TestACPAgentStartPrefersDesktopBridgeWithoutStartingSharedHost(t *testing.T
 	t.Cleanup(func() { close(hold) })
 
 	a := newACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeAuto,
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeManaged,
 		CodexDesktopBridge: true, Env: map[string]string{"CODEX_HOME": home},
 		StateFile: filepath.Join(home, "state.json"),
-	}, acpAgentOptions{desktopProbe: runtime})
+	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
 	if err := a.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -243,7 +243,7 @@ func TestValidateCodexThreadUsesPrivateDesktopIPCWithoutAppServerFallback(t *tes
 	}
 }
 
-func TestACPAgentAutoResolvedDaemonDoesNotSelectDesktopHost(t *testing.T) {
+func TestACPAgentAutoNativeDoesNotSelectDesktopHost(t *testing.T) {
 	home := t.TempDir()
 	binary := codexDaemonManagedBinaryPath(home)
 	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
@@ -258,7 +258,7 @@ func TestACPAgentAutoResolvedDaemonDoesNotSelectDesktopHost(t *testing.T) {
 		StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
 
-	if a.codexHostMode != codexHostModeDaemon || a.codexDesktopHostSelection {
+	if a.codexHostMode != codexHostModeNative || a.codexDesktopHostSelection || a.codexDesktopCoordination {
 		t.Fatalf("mode=%q hostSelection=%v, resolved daemon must remain the only Host authority",
 			a.codexHostMode, a.codexDesktopHostSelection)
 	}
@@ -466,7 +466,7 @@ func TestACPAgentStartPrefersRunningOfficialDaemonOverDesktopBridge(t *testing.T
 		return nil, errors.New("Desktop IPC must not be selected")
 	}))
 	a := newACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "auto",
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "daemon",
 		Env: map[string]string{"CODEX_HOME": home}, StateFile: filepath.Join(home, "state.json"),
 	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
 	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }

@@ -10,16 +10,34 @@ import (
 )
 
 func init() {
-	codexCmd.AddCommand(&cobra.Command{
-		Use: "app", Short: "打开使用共享会话服务的 Codex App", Args: cobra.NoArgs,
+	var restore bool
+	appCommand := &cobra.Command{
+		Use: "app", Short: "打开官方 Codex App；可恢复旧共享启动覆盖", Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			runtime, err := configuredCodexAppBridge()
+			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
-			return runtime.PrepareCodexApp(command.Context())
+			name, selected, err := configuredCodexAppServer(cfg)
+			if err != nil {
+				return err
+			}
+			runtime := agent.NewACPAgent(acpAgentConfigFromConfig(name, selected))
+			if restore {
+				if err := runtime.RestoreCodexAppLaunchEnvironment(command.Context()); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintln(command.OutOrStdout(), "已恢复仍匹配旧共享适配的 App 启动设置；下次正常打开 App 时生效，当前 App 未退出。")
+				return err
+			}
+			if selected.EffectiveCodexHostMode() == "shared" {
+				return runtime.PrepareCodexApp(command.Context())
+			}
+			return runtime.OpenNativeCodexApp(command.Context())
 		},
-	})
+	}
+	appCommand.Flags().BoolVar(&restore, "restore", false, "恢复 WeClaw 旧共享桥接记录的 App 启动环境，不退出 App")
+	codexCmd.AddCommand(appCommand)
 	codexCmd.AddCommand(&cobra.Command{
 		Use: "app-bridge", Hidden: true, DisableFlagParsing: true, SilenceUsage: true,
 		RunE: func(command *cobra.Command, args []string) error {

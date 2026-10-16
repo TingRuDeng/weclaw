@@ -63,6 +63,27 @@ func (a *ACPAgent) restoreCodexAppSharedPreference(ctx context.Context) error {
 	return restoreSystemCodexAppSharedEnvironment(ctx, codexAppBridgeDirectory(codexAppSharedSocketForHome(home)))
 }
 
+// RestoreCodexAppLaunchEnvironment only restores values recorded by the old
+// shared bridge, and preserves subsequent user changes. It never stops an App.
+func (a *ACPAgent) RestoreCodexAppLaunchEnvironment(ctx context.Context) error {
+	return a.restoreCodexAppSharedPreference(ctx)
+}
+
+// OpenNativeCodexApp leaves transport and MCP setup to the official App.
+func (a *ACPAgent) OpenNativeCodexApp(ctx context.Context) error {
+	home, err := codexauth.ResolveCodexHome(a.env, a.runAs.User)
+	if err != nil {
+		return err
+	}
+	backup := filepath.Join(codexAppBridgeDirectory(codexAppSharedSocketForHome(home)), "launch-environment.json")
+	if _, err := os.Lstat(backup); err == nil {
+		return fmt.Errorf("检测到旧 App 共享启动覆盖，请先运行 weclaw codex app --restore，再正常重新打开 App")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return openSystemNativeCodexApp(ctx)
+}
+
 // prepareCodexAppBridge installs only WeClaw-owned launcher files. App keeps
 // sending its complete arguments; bridge and message clients share one socket.
 func (a *ACPAgent) prepareCodexAppBridge(ctx context.Context) (string, string, error) {

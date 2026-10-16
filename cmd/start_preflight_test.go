@@ -26,6 +26,7 @@ func TestStartPreflightRejectsMissingMultiFrontendStandalone(t *testing.T) {
 				"env": {"CODEX_HOME": "` + codexHome + `"},
 				"codex_auto_update": "incompatible",
 				"codex_app_reuse_daemon": true,
+				"codex_host_mode": "daemon",
 				"codex_multi_frontend": true
 			}
 		}

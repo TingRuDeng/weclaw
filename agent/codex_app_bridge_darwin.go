@@ -136,6 +136,12 @@ func prepareSystemCodexAppSharedLocked(ctx context.Context, launcher string, exp
 }
 
 func restoreSystemCodexAppSharedEnvironment(ctx context.Context, dir string) error {
+	return restoreCodexAppSharedEnvironmentWithDeps(ctx, dir, codexAppLaunchEnvironment, runCodexAppLaunchctl)
+}
+
+func restoreCodexAppSharedEnvironmentWithDeps(ctx context.Context, dir string,
+	read func(context.Context, string) (string, error), write func(context.Context, ...string) (string, error),
+) error {
 	backupPath := filepath.Join(dir, "launch-environment.json")
 	if _, err := os.Lstat(backupPath); errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -151,21 +157,41 @@ func restoreSystemCodexAppSharedEnvironment(ctx context.Context, dir string) err
 			return err
 		}
 		var backup codexAppSharedLaunchBackup
-		if err := json.Unmarshal(data, &backup); err != nil {
-			return err
+		if err := json.Unmarshal(data, &backup); err != nil || backup.Previous == nil || backup.Applied == nil {
+			return fmt.Errorf("Codex App 启动环境备份无效")
+		}
+		for key := range backup.Applied {
+			if _, saved := backup.Previous[key]; !saved {
+				return fmt.Errorf("Codex App 启动环境备份缺少原值")
+			}
+			switch key {
+			case codexCLIPathEnv, codexAppUseLocalDaemonEnv, codexAppForceCLIEnv, codexAppCodexHomeEnv, codexAppSQLiteHomeEnv:
+			default:
+				return fmt.Errorf("Codex App 启动环境备份含未知变量")
+			}
 		}
 		for key, applied := range backup.Applied {
-			current, err := codexAppLaunchEnvironment(ctx, key)
+			current, err := read(ctx, key)
 			if err != nil {
 				return err
 			}
 			if current != applied {
 				continue
 			} // Preserve changes made outside WeClaw.
-			if _, err := runCodexAppLaunchctl(ctx, codexAppDaemonLaunchRestoreArgs(key, backup.Previous[key])...); err != nil {
+			if _, err := write(ctx, codexAppDaemonLaunchRestoreArgs(key, backup.Previous[key])...); err != nil {
 				return err
 			}
 		}
 		return os.Remove(backupPath)
 	})
+}
+
+func openSystemNativeCodexApp(ctx context.Context) error {
+	// Let Launch Services locate the App independently of the legacy shared
+	// bridge's bundled Node requirement and fixed installation paths.
+	command := exec.CommandContext(ctx, "/usr/bin/open", "-a", "Codex")
+	if _, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("打开 Codex App（请确认已安装官方 App）: %w", err)
+	}
+	return nil
 }

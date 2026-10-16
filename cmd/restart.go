@@ -157,7 +157,7 @@ func ensureOfflineCodexRestartSafe(cfg *config.Config, force bool) error {
 	}
 	configured := false
 	for _, candidate := range cfg.Agents {
-		if isCodexAppServerAgent(candidate) {
+		if isCodexAppServerAgent(candidate) && !candidate.UsesNativeCodexClient() {
 			configured = true
 			break
 		}

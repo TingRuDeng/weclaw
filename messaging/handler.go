@@ -41,6 +41,8 @@ type AgentMeta struct {
 	Command string // binary path or endpoint
 	Model   string
 	Effort  string
+	// CodexNativeClient leaves official daemon lifetime outside this service.
+	CodexNativeClient bool
 }
 
 // Handler processes incoming WeChat messages and dispatches replies.
@@ -100,6 +102,7 @@ type Handler struct {
 	runtimeRestartPrepared   bool
 	runtimeRestartUnsafe     bool
 	runtimeRestartController agent.CodexRestartController
+	codexRestartFactory      func(string) (agent.CodexRestartController, error)
 	runtimeRestartLease      *agent.CodexFrontendLease
 	runtimeRestartResult     RuntimeRestartResult
 	runtimeRestartStateFile  string

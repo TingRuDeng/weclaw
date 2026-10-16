@@ -30,7 +30,7 @@ func TestRunCodexCLIForwardsFrontendArguments(t *testing.T) {
 	})
 	cfg := config.DefaultConfig()
 	cfg.Agents["codex"] = config.AgentConfig{
-		Type: "acp", Command: "codex", Args: []string{"app-server", "--listen", "stdio://"},
+		Type: "acp", Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, CodexHostMode: "daemon",
 	}
 	loadCodexCLIConfig = func() (*config.Config, error) { return cfg, nil }
 	codexCLIGetwd = func() (string, error) { return "/tmp/project", nil }
@@ -85,7 +85,7 @@ func TestRunCodexCLIUsesRunningServiceToPrepareHost(t *testing.T) {
 		prepareCodexCLIHostWithService = originalServicePrepare
 	})
 	cfg := config.DefaultConfig()
-	cfg.Agents["codex"] = config.AgentConfig{Type: "acp", Command: "codex", Args: []string{"app-server"}}
+	cfg.Agents["codex"] = config.AgentConfig{Type: "acp", Command: "codex", Args: []string{"app-server"}, CodexHostMode: "daemon"}
 	loadCodexCLIConfig = func() (*config.Config, error) { return cfg, nil }
 	codexCLIGetwd = func() (string, error) { return "/tmp/project", nil }
 	prepareCodexCLIHostWithService = func(context.Context, *config.Config) (agent.CodexCLIHost, error) {
@@ -122,7 +122,7 @@ func TestRunCodexCLIRejectsRunningServiceSocketMismatch(t *testing.T) {
 		prepareCodexCLIHostWithService = originalServicePrepare
 	})
 	cfg := config.DefaultConfig()
-	cfg.Agents["codex"] = config.AgentConfig{Type: "acp", Command: "codex", Args: []string{"app-server"}}
+	cfg.Agents["codex"] = config.AgentConfig{Type: "acp", Command: "codex", Args: []string{"app-server"}, CodexHostMode: "daemon"}
 	loadCodexCLIConfig = func() (*config.Config, error) { return cfg, nil }
 	codexCLIGetwd = func() (string, error) { return "/tmp/project", nil }
 	prepareCodexCLIHostWithService = func(context.Context, *config.Config) (agent.CodexCLIHost, error) {

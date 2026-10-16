@@ -69,7 +69,7 @@ func (a *ACPAgent) reconcileCodexHostTopologyLocked(ctx context.Context) error {
 	return err
 }
 
-// tryStartCodexDesktopRuntime 在默认 auto 拓扑中复用当前唯一 Host。已运行的
+// tryStartCodexDesktopRuntime 在兼容 Desktop 拓扑中复用当前唯一 Host。已运行的
 // 官方 daemon 保持权威；否则才连接已运行的 Codex App。App 仍存在但 IPC
 // 不可达时必须失败关闭，不能启动第二个 app-server。
 func (a *ACPAgent) tryStartCodexDesktopRuntime(ctx context.Context) (bool, error) {

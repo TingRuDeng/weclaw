@@ -55,11 +55,19 @@ func TestCodexOfficialDaemonTwoClientProtocol(t *testing.T) {
 	clientB := newCodexDaemonLiveClient(
 		managedBinary, runtimeHome, workspace, filepath.Join(workspace, "client-b.json"),
 	)
+	if clientA.codexHostMode != codexHostModeNative || clientB.codexHostMode != codexHostModeNative {
+		t.Fatal("protocol gate must exercise the default native clients")
+	}
 	socketPath := codexDaemonSocketPath(codexHome)
 
 	var ownedMetadata codexHostMetadata
 	daemonOwned := false
 	t.Cleanup(func() {
+		// Release fixture HTTP requests before stopping the daemon, including
+		// when an assertion fails while a response is deliberately paused.
+		for index := range modelServer.responseGates {
+			modelServer.releaseResponse(index)
+		}
 		clientB.Stop()
 		clientA.Stop()
 		err := runCodexDaemonLiveCleanupSteps(codexDaemonLiveCleanupSteps{
@@ -154,7 +162,7 @@ func TestCodexOfficialDaemonTwoClientProtocol(t *testing.T) {
 	}()
 
 	readOnlyView, err := clientB.rpc(ctx, "thread/read", map[string]interface{}{
-		"threadId": threadID, "includeTurns": true,
+		"threadId": threadID, "includeTurns": false,
 	})
 	if err != nil {
 		t.Fatalf("client B thread/read before turn start: %v", err)
@@ -316,6 +324,7 @@ func runCodexDaemonLiveConcurrentStartGate(
 	}
 	start := make(chan struct{})
 	results := make(chan codexDaemonLiveStartResult, 2)
+	markers := map[string]string{"client A": "LIVE_GATE_START_A_7F3A", "client B": "LIVE_GATE_START_B_7F3A"}
 	for _, candidate := range []codexDaemonLiveStartResult{
 		{clientName: "client A", client: clientA},
 		{clientName: "client B", client: clientB},
@@ -323,7 +332,9 @@ func runCodexDaemonLiveConcurrentStartGate(
 		candidate := candidate
 		go func() {
 			<-start
-			result, err := candidate.client.rpc(ctx, "turn/start", params)
+			clientParams := params
+			clientParams.Input = []codexUserInput{{Type: "text", Text: params.Input[0].Text + " " + markers[candidate.clientName]}}
+			result, err := candidate.client.rpc(ctx, "turn/start", clientParams)
 			candidate.result = result
 			candidate.err = err
 			results <- candidate
@@ -339,13 +350,21 @@ func runCodexDaemonLiveConcurrentStartGate(
 		winner, loser = first, second
 	case first.err != nil && second.err == nil:
 		winner, loser = second, first
+	case first.err == nil && second.err == nil:
+		// Current official daemons may accept a start racing with an active
+		// turn as additional input to that same turn. A successful submission
+		// must never be resent as steer.
+		winner, loser = first, second
+		if id := codexTurnIDFromStartResult(second.result); id == "" || id != codexTurnIDFromStartResult(first.result) {
+			t.Fatalf("concurrent successful starts returned different turn IDs: %s; %s", first.result, second.result)
+		}
 	default:
 		t.Fatalf(
-			"concurrent turn/start results: %s error=%v result=%s; %s error=%v result=%s; want one success and one active-turn rejection",
+			"concurrent turn/start results: %s error=%v result=%s; %s error=%v result=%s; want accepted inputs in one turn or an explicit active-turn rejection",
 			first.clientName, first.err, first.result, second.clientName, second.err, second.result,
 		)
 	}
-	if !isCodexTurnStateRace(loser.err) {
+	if loser.err != nil && !isCodexTurnStateRace(loser.err) {
 		t.Fatalf("%s concurrent turn/start error=%v, want deterministic active-turn race", loser.clientName, loser.err)
 	}
 	turnID := codexTurnIDFromStartResult(winner.result)
@@ -353,15 +372,34 @@ func runCodexDaemonLiveConcurrentStartGate(
 		t.Fatalf("%s winning turn/start response has no turn id: %s", winner.clientName, winner.result)
 	}
 	modelServer.waitForRequest(t, 2)
+	if loser.err != nil {
+		if err := loser.client.SteerCodexThread(ctx, loser.clientName, threadID, turnID, params.Input[0].Text+" "+markers[loser.clientName]); err != nil {
+			t.Fatalf("%s convert rejected turn/start to turn/steer: %v", loser.clientName, err)
+		}
+	}
 	if err := loser.client.SteerCodexThread(
 		ctx, loser.clientName, threadID, turnID,
 		"Continue the same turn and include the exact marker "+steerMarker+" in the final answer.",
 	); err != nil {
-		t.Fatalf("%s convert rejected turn/start to turn/steer: %v", loser.clientName, err)
+		t.Fatalf("%s steer concurrent turn: %v", loser.clientName, err)
 	}
 	modelServer.releaseResponse(2)
 	assertCodexDaemonLiveUniqueCompletion(t, eventsA, turnID, "client A concurrent-start observer")
 	modelServer.assertRaceRequests(t, steerMarker)
+	modelServer.mu.Lock()
+	lastRequest := append([]byte(nil), modelServer.requests[len(modelServer.requests)-1]...)
+	modelServer.mu.Unlock()
+	var last struct {
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(lastRequest, &last); err != nil {
+		t.Fatal(err)
+	}
+	for client, marker := range markers {
+		if count := strings.Count(string(last.Input), marker); count != 1 {
+			t.Fatalf("%s concurrent input occurred %d times in final model history, want exactly once", client, count)
+		}
+	}
 
 	history, err := loser.client.rpc(ctx, "thread/read", map[string]interface{}{
 		"threadId": threadID, "includeTurns": true,
@@ -375,11 +413,14 @@ func runCodexDaemonLiveConcurrentStartGate(
 }
 
 type codexDaemonLiveModelServer struct {
-	server        *httptest.Server
-	mu            sync.Mutex
-	requests      [][]byte
-	responses     []string
-	responseGates map[int]*codexDaemonLiveResponseGate
+	server          *httptest.Server
+	mu              sync.Mutex
+	requests        [][]byte
+	responses       []string
+	responseGates   map[int]*codexDaemonLiveResponseGate
+	rejected        []string
+	approvalCommand string
+	workspace       string
 }
 
 type codexDaemonLiveResponseGate struct {
@@ -407,6 +448,8 @@ func newCodexDaemonLiveModelServer(
 		t.Fatalf("marshal live approval tool arguments: %v", err)
 	}
 	model := &codexDaemonLiveModelServer{
+		approvalCommand: approvalCommand,
+		workspace:       workspace,
 		responses: []string{
 			codexDaemonLiveSSE(t,
 				map[string]interface{}{
@@ -473,6 +516,30 @@ func newCodexDaemonLiveModelServer(
 	model.server = httptest.NewServer(http.HandlerFunc(model.serveHTTP))
 	t.Cleanup(model.server.Close)
 	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		model.mu.Lock()
+		defer model.mu.Unlock()
+		t.Logf("isolated Responses fixture received %d uncompressed requests", len(model.requests))
+		t.Logf("fixture rejected requests: %v", model.rejected)
+		for i, body := range model.requests {
+			var request struct {
+				Tools []struct {
+					Type string `json:"type"`
+					Name string `json:"name"`
+				} `json:"tools"`
+			}
+			if json.Unmarshal(body, &request) == nil {
+				var tools []string
+				for _, tool := range request.Tools {
+					tools = append(tools, tool.Type+":"+tool.Name)
+				}
+				t.Logf("fixture request %d advertised tools: %v", i, tools)
+			}
+		}
+	})
+	t.Cleanup(func() {
 		for index := range model.responseGates {
 			model.releaseResponse(index)
 		}
@@ -495,10 +562,16 @@ func (s *codexDaemonLiveModelServer) serveHTTP(w http.ResponseWriter, req *http.
 		return
 	}
 	if req.Method != http.MethodPost || req.URL.Path != "/v1/responses" {
+		s.mu.Lock()
+		s.rejected = append(s.rejected, req.Method+" "+req.URL.Path)
+		s.mu.Unlock()
 		http.NotFound(w, req)
 		return
 	}
 	if encoding := strings.TrimSpace(req.Header.Get("Content-Encoding")); encoding != "" {
+		s.mu.Lock()
+		s.rejected = append(s.rejected, "encoding="+encoding)
+		s.mu.Unlock()
 		http.Error(w, "compressed live protocol requests are not supported", http.StatusUnsupportedMediaType)
 		return
 	}
@@ -518,6 +591,34 @@ func (s *codexDaemonLiveModelServer) serveHTTP(w http.ResponseWriter, req *http.
 	response := s.responses[requestIndex]
 	gate := s.responseGates[requestIndex]
 	s.mu.Unlock()
+	if requestIndex == 0 {
+		var request struct {
+			Tools json.RawMessage `json:"tools"`
+		}
+		if err := json.Unmarshal(body, &request); err == nil &&
+			!codexDaemonLiveHasTool(request.Tools, "shell_command") && codexDaemonLiveHasTool(request.Tools, "exec_command") {
+			arguments, _ := json.Marshal(map[string]interface{}{
+				"cmd": s.approvalCommand, "workdir": s.workspace, "yield_time_ms": 1000,
+			})
+			// Retain the same call ID and SSE sequence while selecting the
+			// command tool actually advertised by this official CLI version.
+			var events []string
+			for _, line := range strings.Split(response, "\n") {
+				if strings.HasPrefix(line, "data: ") {
+					var event map[string]interface{}
+					if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event) == nil {
+						if item, ok := event["item"].(map[string]interface{}); ok && item["name"] == "shell_command" {
+							item["name"], item["arguments"] = "exec_command", string(arguments)
+							data, _ := json.Marshal(event)
+							line = "data: " + string(data)
+						}
+					}
+				}
+				events = append(events, line)
+			}
+			response = strings.Join(events, "\n")
+		}
+	}
 	if gate != nil {
 		gate.enteredOnce.Do(func() { close(gate.entered) })
 		select {
@@ -530,6 +631,35 @@ func (s *codexDaemonLiveModelServer) serveHTTP(w http.ResponseWriter, req *http.
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = io.WriteString(w, response)
+}
+
+func codexDaemonLiveHasTool(raw json.RawMessage, name string) bool {
+	var value interface{}
+	if json.Unmarshal(raw, &value) != nil {
+		return false
+	}
+	var contains func(interface{}) bool
+	contains = func(value interface{}) bool {
+		switch v := value.(type) {
+		case map[string]interface{}:
+			if v["name"] == name {
+				return true
+			}
+			for _, child := range v {
+				if contains(child) {
+					return true
+				}
+			}
+		case []interface{}:
+			for _, child := range v {
+				if contains(child) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return contains(value)
 }
 
 func (s *codexDaemonLiveModelServer) waitForRequest(t *testing.T, index int) {
@@ -673,6 +803,9 @@ func installCodexDaemonLiveModelConfig(t *testing.T, codexHome string, serverURL
 	config := []byte(fmt.Sprintf(`model = "mock-model"
 model_provider = "weclaw_live"
 sandbox_mode = "read-only"
+
+[features]
+enable_request_compression = false
 
 [model_providers.weclaw_live]
 name = "WeClaw live protocol fixture"
@@ -855,7 +988,7 @@ func newCodexDaemonLiveClient(
 		Cwd:                workspace,
 		Env:                codexDaemonLiveEnvironment(runtime.userHome, runtime.codexHome, runtime.sqliteHome, packageRoot),
 		StateFile:          stateFile,
-		CodexHostMode:      codexHostModeDaemon,
+		CodexHostMode:      codexHostModeAuto,
 		CodexAutoUpdate:    "off",
 		ApprovalPolicy:     "untrusted",
 		SandboxMode:        "read-only",
@@ -934,14 +1067,23 @@ func waitForCodexDaemonLiveEvent(
 	t.Helper()
 	timer := time.NewTimer(protocolLiveEventTimeout)
 	defer timer.Stop()
+	var seen []string
 	for {
 		select {
 		case event := <-events:
-			if event != nil && event.TurnID == turnID && match(event) {
-				return event
+			if event != nil {
+				if len(seen) < 12 {
+					seen = append(seen, event.Kind+":"+event.TurnID)
+				}
+				if event.TurnID == turnID && match(event) {
+					return event
+				}
+				if event.TurnID == turnID && isCodexTurnTerminalEvent(event) {
+					t.Fatalf("terminal event before %s: kind=%s text=%s", label, event.Kind, event.Text)
+				}
 			}
 		case <-timer.C:
-			t.Fatalf("timed out waiting for %s on turn %s", label, turnID)
+			t.Fatalf("timed out waiting for %s on turn %s; observed=%v", label, turnID, seen)
 		}
 	}
 }
