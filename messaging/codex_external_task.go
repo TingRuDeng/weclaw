@@ -139,7 +139,8 @@ func resolveExternalCodexRuntime(opts externalCodexTaskOptions) resolvedExternal
 		return resolved
 	}
 	if !state.Active {
-		resolved.confirmedInactive = true
+		// 当前 Host 未加载会话不能证明另一个 App 执行端已经结束任务。
+		resolved.confirmedInactive = !strings.EqualFold(state.ThreadStatus, "notLoaded")
 		return resolved
 	}
 	resolved.active = true

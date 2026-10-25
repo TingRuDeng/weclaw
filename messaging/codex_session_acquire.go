@@ -404,7 +404,11 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 	if err != nil {
 		return h.failCodexAcquireSync(result, liveAgent, err), nil
 	}
-	if prepared.active {
+	// App 的只读 rollout 观察不属于当前 daemon，不能借订阅抢占 writer。
+	if prepared.active && !prepared.state.Controllable {
+		opts.runtimeGeneration = 0
+	}
+	if prepared.active && prepared.state.Controllable {
 		if subscriptionAgent, ok := req.agent.(agent.CodexThreadObserverSubscriptionAgent); ok {
 			if _, err := subscriptionAgent.SubscribeCodexThread(
 				req.ctx, req.route.conversationID, req.route.threadID,

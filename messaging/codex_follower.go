@@ -340,6 +340,12 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 	}
 	if prepared.active {
 		opts.terminalDeliveryKey = codexFollowerTerminalOutboxID(snapshot, prepared.state.ActiveTurnID)
+	}
+	if prepared.active && !prepared.state.Controllable {
+		// 文件观察没有 daemon generation，也不能把外部 turn 提交给 daemon 收敛。
+		opts.runtimeGeneration = 0
+	}
+	if prepared.active && prepared.state.Controllable {
 		reconciledBinding, reconcileErr := liveAgent.ReconcileCodexObservedTurn(ctx, request, prepared.state.CodexThreadState)
 		if reconcileErr != nil {
 			return reconcileErr
