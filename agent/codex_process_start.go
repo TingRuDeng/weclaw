@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var codexChineseProcessStart = regexp.MustCompile(`^([日一二三四五六])\s+([0-9]{1,2})/\s*([0-9]{1,2})\s+([0-9]{2}:[0-9]{2}:[0-9]{2})\s+([0-9]{4})$`)
+var codexChineseProcessStart = regexp.MustCompile(`^([日一二三四五六])\s+([0-9]{1,2})月?/\s*([0-9]{1,2})\s+([0-9]{2}:[0-9]{2}:[0-9]{2})\s+([0-9]{4})$`)
 
 // sameCodexProcessStart accepts the C and macOS Chinese representations of the
 // same local start time. Old records have no timezone, so different wall times

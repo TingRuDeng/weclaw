@@ -19,6 +19,9 @@ func TestSameCodexProcessStart(t *testing.T) {
 		want              bool
 	}{
 		{"legacy Chinese", "二 10/ 6 18:33:39 2026", english, true},
+		{"Chinese month suffix", "六 10月/24 10:30:40 2026", "Sat Oct 24 10:30:40 2026", true},
+		{"Chinese month suffix and padded day", "二 10月/ 6 18:33:39 2026", english, true},
+		{"Chinese month suffix and single digit month", "四  1月/ 1 00:00:00 2026", "Thu Jan  1 00:00:00 2026", true},
 		{"double digit day", "二 10/13 21:33:05 2026", "Tue Oct 13 21:33:05 2026", true},
 		{"single digit month", "四  1/ 1 00:00:00 2026", "Thu Jan  1 00:00:00 2026", true},
 		{"same raw", english, english, true},
@@ -30,6 +33,9 @@ func TestSameCodexProcessStart(t *testing.T) {
 		{"year changed", "三 10/ 6 18:33:39 2027", english, false},
 		{"timezone shift is not guessed", "二 10/ 6 10:33:39 2026", english, false},
 		{"wrong Chinese weekday", "三 10/ 6 18:33:39 2026", english, false},
+		{"month suffix with changed second", "二 10月/ 6 18:33:40 2026", english, false},
+		{"month suffix with wrong weekday", "三 10月/ 6 18:33:39 2026", english, false},
+		{"month suffix with invalid date", "二 13月/ 6 18:33:39 2026", english, false},
 		{"wrong English weekday", "二 10/ 6 18:33:39 2026", "Wed Oct  6 18:33:39 2026", false},
 		{"invalid date", "二 13/ 6 18:33:39 2026", english, false},
 		{"invalid time", "二 10/ 6 28:33:39 2026", english, false},
