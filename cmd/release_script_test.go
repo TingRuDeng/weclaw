@@ -800,8 +800,8 @@ func TestWorkflowsUseSecureGoToolchainAndVulnerabilityScan(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		text := string(content)
-		if !strings.Contains(text, "go-version: '1.26.9'") {
-			t.Fatalf("%s must use Go 1.26.9", path)
+		if !strings.Contains(text, "go-version: '1.26.10'") {
+			t.Fatalf("%s must use Go 1.26.10", path)
 		}
 		if !strings.Contains(text, "govulncheck@v1.6.0") {
 			t.Fatalf("%s must run pinned govulncheck v1.6.0", path)
@@ -811,8 +811,8 @@ func TestWorkflowsUseSecureGoToolchainAndVulnerabilityScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(release), "go-version: '1.26.9'") {
-		t.Fatal("stable release workflow must use Go 1.26.9")
+	if !strings.Contains(string(release), "go-version: '1.26.10'") {
+		t.Fatal("stable release workflow must use Go 1.26.10")
 	}
 	assertReleaseWorkflowDelegatesCanonicalScript(t)
 }
