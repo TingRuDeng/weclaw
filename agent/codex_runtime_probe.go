@@ -574,6 +574,10 @@ func (a *ACPAgent) readCodexAppServerThreadSnapshotResultWithItems(
 
 func (a *ACPAgent) readCodexAppServerThreadMetadata(ctx context.Context, threadID string) (codexThreadSnapshot, bool, uint64, error) {
 	threadID = strings.TrimSpace(threadID)
+	// 绑定校验和后台观察也会在断线后先读 thread，不能只靠普通输入恢复连接。
+	if err := a.ensureStarted(ctx); err != nil {
+		return codexThreadSnapshot{}, false, 0, err
+	}
 	result, sequence, err := a.rpcWithSequence(ctx, "thread/read", map[string]interface{}{
 		"threadId": threadID, "includeTurns": false,
 	})

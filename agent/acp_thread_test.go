@@ -1376,6 +1376,7 @@ func TestACPAgentWatchReturnsCompletedStateAfterRegistration(t *testing.T) {
 func TestReadCodexAppServerThreadSnapshotReturnsWireWatermark(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
 	a.stdin = nopWriteCloser{Buffer: &bytes.Buffer{}}
+	a.started = true
 	type snapshotResult struct {
 		state    CodexThreadState
 		sequence uint64
