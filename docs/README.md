@@ -53,6 +53,7 @@ ai_summary:
 
 ## Detail docs
 
+- [Git 历史、架构演进与历史包袱深度审计报告（2026-11-20）](superpowers/specs/2026-11-20-git-history-architecture-audit.md) 是基于 `9161ce7`（含 `origin/main` 领先 4 提交至 `e1a5eb4`）的全仓库只读考古与历史包袱分级清理报告；它不是当前 authority doc，产品事实仍以 `docs/AI_CONTEXT.md` 和源码为准。
 - [Codex 原生客户端设计](superpowers/specs/2026-10-15-codex-native-client-design.md) 与[实施计划](superpowers/plans/2026-10-15-codex-native-client.md) 记录本轮默认 native 接入与生命周期边界；实现事实以 docs/AI_CONTEXT.md 和源码为准，真实 App 验收另行记录。
 - [Codex 单一 Host、多前端设计](superpowers/specs/2026-07-18-codex-single-app-server-design.md) 是显式旧模式的历史共享 Host 基线；它不是当前 authority doc，Host 拓扑、Handoff、provider 迁移、writer lease 或协议边界变化时以 `docs/AI_CONTEXT.md` 和源码为准并同步复核。
 - [Codex / Claude 工作空间与会话命名管理设计](superpowers/specs/2026-08-06-agent-workspace-session-management-design.md) 是已实施并发布的工作空间登记、隐藏与会话重命名设计基线；它不是当前 authority doc，产品事实仍以 `docs/AI_CONTEXT.md` 和源码为准。
