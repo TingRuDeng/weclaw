@@ -439,7 +439,7 @@ func (runtime startRuntime) startServices() error {
 		return fmt.Errorf("start Codex follower reconciler: %w", err)
 	}
 	go runSoftConfigReloader(runtime.ctx, runtime.handler, runtime.registry)
-	apiServer := api.NewServer(nil, runtime.apiAddress(),
+	apiServer := api.NewServer(runtime.apiAddress(),
 		api.WithToken(runtime.cfg.APIToken),
 		api.WithRegistry(runtime.registry),
 		api.WithRuntimeStatusProvider(runtime.handler),

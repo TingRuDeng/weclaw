@@ -19,7 +19,6 @@ type codexSessionCommandRuntime struct {
 	agentName       string
 	agent           agent.Agent
 	bindingKey      string
-	ownerBindingKey string
 	workspaceRoot   string
 	renameSpec      *sessionRenameCommandSpec
 }
@@ -94,7 +93,6 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 		admin: h.codexSessionCommandAdmin(req, actorUserID), private: req.Private, fields: fields,
 		agentName: agentName, agent: ag,
 		bindingKey:      codexBindingKey(routeUserID, agentName),
-		ownerBindingKey: codexBindingKey(actorUserID, agentName),
 		workspaceRoot:   h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag),
 	}
 	if renameHandled {
@@ -153,7 +151,6 @@ func (h *Handler) prepareCodexCdCommand(
 		agentName:       agentName,
 		agent:           h.AgentByName(agentName),
 		bindingKey:      codexBindingKey(routeUserID, agentName),
-		ownerBindingKey: codexBindingKey(actorUserID, agentName),
 	}
 	unlockRegistry := h.lockWorkspaceRegistryControl()
 	unlock, err := h.lockCodexSessionBinding(ctx, runtime.bindingKey, fields[1])
@@ -315,7 +312,7 @@ func (h *Handler) dispatchCodexSwitchCommand(runtime codexSessionCommandRuntime)
 	text := h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
 		ctx: runtime.ctx, userID: runtime.routeUserID, agentName: runtime.agentName,
 		workspaceRoot: runtime.workspaceRoot, agent: runtime.agent,
-		target: runtime.fields[2], ownerBindingKey: runtime.ownerBindingKey,
+		target: runtime.fields[2],
 		options: codexSwitchOptions{
 			actorUserID: runtime.actorUserID, authorizedIdentity: runtime.req.AuthorizedIdentity, platform: runtime.req.Platform,
 			accountID: runtime.req.AccountID, reply: runtime.req.Reply,
@@ -331,7 +328,7 @@ func (runtime codexSessionCommandRuntime) shortSelectionRequest() codexShortSele
 		UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID, AuthorizedIdentity: runtime.req.AuthorizedIdentity,
 		AgentName: runtime.agentName, WorkspaceRoot: runtime.workspaceRoot,
 		Agent: runtime.agent, BindingKey: runtime.bindingKey, Target: runtime.fields[1],
-		OwnerBindingKey: runtime.ownerBindingKey, Platform: runtime.req.Platform,
+		Platform: runtime.req.Platform,
 		AccountID: runtime.req.AccountID, Reply: runtime.req.Reply, Admin: runtime.admin,
 		TaskContext: runtime.externalTaskCtx,
 	}
@@ -342,7 +339,7 @@ func (runtime codexSessionCommandRuntime) workspaceCdRequest(target string) code
 	return codexWorkspaceCdRequest{
 		Context: runtime.ctx, TaskContext: runtime.externalTaskCtx,
 		UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID, AuthorizedIdentity: runtime.req.AuthorizedIdentity,
-		BindingKey: runtime.bindingKey, OwnerBindingKey: runtime.ownerBindingKey,
+		BindingKey: runtime.bindingKey,
 		AgentName: runtime.agentName, Target: target, Agent: runtime.agent,
 		Platform: runtime.req.Platform, AccountID: runtime.req.AccountID,
 		Reply: runtime.req.Reply, Admin: runtime.admin,

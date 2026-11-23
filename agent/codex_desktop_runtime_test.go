@@ -918,13 +918,11 @@ func TestACPAgentDesktopControlledTurnDoesNotAutoRecover(t *testing.T) {
 	a, caller := desktopRuntimeTestAgent(t)
 	claimDesktopRemoteControl(t, a)
 	caller.err = ErrCodexDesktopNoClient
-	restarts := 0
-	a.restartCodexAppServerCall = func(context.Context) error { restarts++; return nil }
 	_, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
 		Runtime: desktopRuntimeRequest(), Message: "继续",
 	})
-	if !errors.Is(err, ErrCodexDesktopNoClient) || restarts != 0 {
-		t.Fatalf("error=%v restarts=%d", err, restarts)
+	if !errors.Is(err, ErrCodexDesktopNoClient) {
+		t.Fatalf("error=%v", err)
 	}
 }
 

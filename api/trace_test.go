@@ -26,7 +26,7 @@ func (*traceQueryStub) Status() observability.Status {
 
 func TestHandleTraceQueryRequiresActualLoopbackAndMapsFilters(t *testing.T) {
 	stub := &traceQueryStub{page: observability.Page{Events: []observability.Event{{TraceID: "trace-1"}}}}
-	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret"), WithTraceQueryProvider(stub))
+	server := NewServer("127.0.0.1:18011", WithToken("secret"), WithTraceQueryProvider(stub))
 	req := httptest.NewRequest(http.MethodGet, "/api/traces?message_id=message-1&thread_id=thread-1&limit=12", nil)
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "127.0.0.1:43210"
@@ -57,7 +57,7 @@ func TestHandleTraceQueryRequiresActualLoopbackAndMapsFilters(t *testing.T) {
 }
 
 func TestHandleTraceQueryRejectsInvalidLimit(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011", WithTraceQueryProvider(&traceQueryStub{}))
+	server := NewServer("127.0.0.1:18011", WithTraceQueryProvider(&traceQueryStub{}))
 	req := httptest.NewRequest(http.MethodGet, "/api/traces?limit=1001", nil)
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "127.0.0.1:43210"

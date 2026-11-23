@@ -29,7 +29,7 @@ func (w *failingResponseWriter) WriteHeader(int) {}
 
 // TestRuntimeStatusLogsJSONWriteFailure 验证 API 响应写入失败不会被静默忽略。
 func TestRuntimeStatusLogsJSONWriteFailure(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011")
+	server := NewServer("127.0.0.1:18011")
 	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
 	req.Host = "127.0.0.1:18011"
 	w := &failingResponseWriter{header: make(http.Header)}

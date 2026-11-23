@@ -9,10 +9,9 @@ import (
 type codexAppServerGateState string
 
 const (
-	codexAppServerRunning    codexAppServerGateState = "running"
-	codexAppServerDraining   codexAppServerGateState = "draining"
-	codexAppServerRestarting codexAppServerGateState = "restarting"
-	codexAppServerFailed     codexAppServerGateState = "failed"
+	codexAppServerRunning  codexAppServerGateState = "running"
+	codexAppServerDraining codexAppServerGateState = "draining"
+	codexAppServerFailed   codexAppServerGateState = "failed"
 )
 
 type codexAppServerGate struct {
@@ -121,74 +120,6 @@ func (g *codexAppServerGate) fail(cause error) {
 	g.mu.Lock()
 	g.failure = cause
 	g.state = codexAppServerFailed
-	g.notifyLocked()
-	g.mu.Unlock()
-}
-
-// drain 阻止新 turn，等待已有 turn 结束，再执行一次共享运行时刷新。
-func (g *codexAppServerGate) drain(ctx context.Context, restart func(context.Context) error) error {
-	if err := g.beginDrain(ctx); err != nil {
-		return err
-	}
-	if err := g.waitUntilIdle(ctx); err != nil {
-		g.abortDrain()
-		return err
-	}
-	g.markRestarting()
-	err := restart(ctx)
-	g.finishRestart(err == nil)
-	return err
-}
-
-func (g *codexAppServerGate) beginDrain(ctx context.Context) error {
-	for {
-		g.mu.Lock()
-		if g.state == codexAppServerRunning {
-			g.state = codexAppServerDraining
-			g.notifyLocked()
-			g.mu.Unlock()
-			return nil
-		}
-		if g.state == codexAppServerFailed {
-			err := g.unavailableErrorLocked()
-			g.mu.Unlock()
-			return err
-		}
-		changed := g.changed
-		g.mu.Unlock()
-		if err := waitCodexGateChange(ctx, changed); err != nil {
-			return err
-		}
-	}
-}
-
-func (g *codexAppServerGate) waitUntilIdle(ctx context.Context) error {
-	for {
-		g.mu.Lock()
-		if g.activeTurns == 0 {
-			g.mu.Unlock()
-			return nil
-		}
-		changed := g.changed
-		g.mu.Unlock()
-		if err := waitCodexGateChange(ctx, changed); err != nil {
-			return err
-		}
-	}
-}
-
-func (g *codexAppServerGate) markRestarting() {
-	g.mu.Lock()
-	g.state = codexAppServerRestarting
-	g.notifyLocked()
-	g.mu.Unlock()
-}
-
-// abortDrain 只用于尚未触碰运行时的等待失败；原 Host 仍然可写。
-func (g *codexAppServerGate) abortDrain() {
-	g.mu.Lock()
-	g.failure = nil
-	g.state = codexAppServerRunning
 	g.notifyLocked()
 	g.mu.Unlock()
 }

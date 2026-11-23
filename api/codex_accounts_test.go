@@ -38,7 +38,7 @@ func (f *fakeCodexAccountController) DoctorCodexAccounts(context.Context) codexa
 
 func TestCodexAccountAPIRejectsNonLoopbackSourceEvenWithToken(t *testing.T) {
 	controller := &fakeCodexAccountController{}
-	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret-token"), WithCodexAccountController(controller))
+	server := NewServer("127.0.0.1:18011", WithToken("secret-token"), WithCodexAccountController(controller))
 	req := httptest.NewRequest(http.MethodGet, "/api/codex/accounts", nil)
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "203.0.113.8:43210"
@@ -52,7 +52,7 @@ func TestCodexAccountAPIRejectsNonLoopbackSourceEvenWithToken(t *testing.T) {
 }
 
 func TestCodexAccountAPIRequiresConfiguredToken(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret-token"), WithCodexAccountController(&fakeCodexAccountController{}))
+	server := NewServer("127.0.0.1:18011", WithToken("secret-token"), WithCodexAccountController(&fakeCodexAccountController{}))
 	req := httptest.NewRequest(http.MethodGet, "/api/codex/accounts", nil)
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "127.0.0.1:43210"
@@ -75,7 +75,7 @@ func TestCodexAccountAPIResponseIsRedacted(t *testing.T) {
 			State: agent.CodexAccountSyncSynced, AuthProfile: &profile, LiveProfile: &profile,
 		},
 	}}
-	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret-token"), WithCodexAccountController(controller))
+	server := NewServer("127.0.0.1:18011", WithToken("secret-token"), WithCodexAccountController(controller))
 	req := httptest.NewRequest(http.MethodGet, "/api/codex/accounts", nil)
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "127.0.0.1:43210"
@@ -96,7 +96,7 @@ func TestCodexAccountAPIResponseIsRedacted(t *testing.T) {
 
 func TestCodexAccountAPIBusyErrorIsStructured(t *testing.T) {
 	controller := &fakeCodexAccountController{useErr: codexauth.NewError(codexauth.CodeBusy, "当前有任务", errors.New("private detail"))}
-	server := NewServer(nil, "127.0.0.1:18011", WithCodexAccountController(controller))
+	server := NewServer("127.0.0.1:18011", WithCodexAccountController(controller))
 	req := httptest.NewRequest(http.MethodPost, "/api/codex/accounts/use", strings.NewReader(`{"profile":"work"}`))
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "127.0.0.1:43210"
@@ -109,7 +109,7 @@ func TestCodexAccountAPIBusyErrorIsStructured(t *testing.T) {
 }
 
 func TestCodexAccountDoctorOmitsMachinePaths(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011", WithCodexAccountController(&fakeCodexAccountController{}))
+	server := NewServer("127.0.0.1:18011", WithCodexAccountController(&fakeCodexAccountController{}))
 	req := httptest.NewRequest(http.MethodGet, "/api/codex/accounts/doctor", nil)
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "127.0.0.1:43210"

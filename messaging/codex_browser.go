@@ -22,7 +22,6 @@ type codexWorkspaceCdRequest struct {
 	ActorUserID        string
 	AuthorizedIdentity string
 	BindingKey         string
-	OwnerBindingKey    string
 	AgentName          string
 	Target             string
 	Agent              agent.Agent
@@ -113,7 +112,7 @@ func (h *Handler) handleCodexCdResult(req codexWorkspaceCdRequest) navigationCom
 }
 
 // setCodexActiveWorkspaceForRoute 只更新当前 route，避免平台路由会话互相污染工作空间。
-func (h *Handler) setCodexActiveWorkspaceForRoute(bindingKey string, _ string, workspaceRoot string) {
+func (h *Handler) setCodexActiveWorkspaceForRoute(bindingKey string, workspaceRoot string) {
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 }
 
@@ -138,7 +137,7 @@ func (h *Handler) enterCodexWorkspace(req codexWorkspaceCdRequest, group codexWo
 			req.ActorUserID, req.UserID, req.AgentName, workspaceRoot, req.Agent,
 		)
 	}
-	h.setCodexActiveWorkspaceForRoute(req.BindingKey, req.OwnerBindingKey, workspaceRoot)
+	h.setCodexActiveWorkspaceForRoute(req.BindingKey, workspaceRoot)
 	if len(sessions) == 0 {
 		return h.enterCodexWorkspaceWithoutSessionsResult(req, group.Name, workspaceRoot)
 	}

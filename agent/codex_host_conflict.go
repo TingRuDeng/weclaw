@@ -892,13 +892,6 @@ func (a *ACPAgent) preflightCodexHostConflicts(ctx context.Context, authorityPID
 	return plan.conflictError()
 }
 
-// StopConflictingCodexHosts is the explicit offline restart operation. It
-// first proves every discovered extra Host, then performs stops one by one.
-// The default restart path never calls this method.
-func (a *ACPAgent) StopConflictingCodexHosts(ctx context.Context) ([]CodexRestartConflictSnapshot, error) {
-	return a.stopConflictingCodexHosts(ctx, false)
-}
-
 // ForceStopCodexRuntime closes Codex App and stops every current-user Codex
 // app-server group that can be proved from a fresh process snapshot. Unlike
 // StopConflictingCodexHosts, protected lifecycle metadata is not required,

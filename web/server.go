@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/internal/auththrottle"
 )
 
 //go:embed static/*
@@ -30,7 +32,7 @@ type Server struct {
 	token             string
 	cfg               *configService
 	wechatLogins      *wechatLoginStore
-	authThrottle      *authThrottle
+	authThrottle      *auththrottle.Throttle
 	allowInsecureHTTP bool
 }
 
@@ -52,7 +54,7 @@ func NewServer(opts Options) *Server {
 		token:             strings.TrimSpace(opts.Token),
 		cfg:               newConfigService(),
 		wechatLogins:      newWechatLoginStore(),
-		authThrottle:      newAuthThrottle(),
+		authThrottle:      auththrottle.New(),
 		allowInsecureHTTP: opts.AllowInsecureHTTP,
 	}
 }
@@ -133,7 +135,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			client := clientKey(r)
+			client := auththrottle.ClientKey(r)
 			if s.authThrottle.Blocked(client) {
 				http.Error(w, "too many failed auth attempts, slow down", http.StatusTooManyRequests)
 				return

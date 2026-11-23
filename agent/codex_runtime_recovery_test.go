@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestACPAgentResetSessionRebindsNewThreadRuntime(t *testing.T) {
@@ -168,34 +166,6 @@ func TestACPAgentRecoveryDoesNotFailDesktopWatchers(t *testing.T) {
 		}
 	default:
 		t.Fatal("app-server turn did not receive restart interruption")
-	}
-}
-
-func TestACPAgentRestartWaitsForAppServerPermit(t *testing.T) {
-	a := runtimeRecoveryTestAgent(t, CodexRuntimeUnknown)
-	permit, err := a.appServerGate.acquire(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var restarts atomic.Int32
-	a.restartCodexAppServerCall = func(context.Context) error {
-		restarts.Add(1)
-		return nil
-	}
-	done := make(chan error, 1)
-	go func() { done <- a.restartCodexAppServer(context.Background()) }()
-	waitForCodexGateState(t, a.appServerGate, codexAppServerDraining)
-	if restarts.Load() != 0 {
-		t.Fatal("permit 释放前不应刷新 app-server")
-	}
-	permit.release()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(codexGateTestTimeout):
-		t.Fatal("app-server 刷新未完成")
 	}
 }
 

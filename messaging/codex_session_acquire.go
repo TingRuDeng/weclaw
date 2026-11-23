@@ -71,9 +71,6 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 	if !ok {
 		return codexSessionAcquireResult{}, errCodexSessionAcquireUnsupported
 	}
-	if err := h.guardCodexThreadSwitch(req.route, req.route.threadID); err != nil {
-		return codexSessionAcquireResult{}, err
-	}
 
 	store := h.ensureCodexSessions()
 	initial := store.remoteSelectionSnapshot(req.route.bindingKey, req.route.threadID)
@@ -188,9 +185,6 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		} else {
 			result = h.claimLatestIdleCodexResult(result)
 		}
-	}
-	if result.runtimeErr != nil {
-		result = h.recordCodexRuntimeRecoveryResult(req, result)
 	}
 	if err == nil && result.runtimeErr == nil &&
 		(result.progressReanchorErr == nil || result.progressReanchored) {

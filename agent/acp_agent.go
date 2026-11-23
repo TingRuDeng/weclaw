@@ -167,7 +167,6 @@ type ACPAgent struct {
 	codexRestartSnapshot       CodexRestartSnapshot
 	codexRestartPrepared       bool
 	codexAccountSafetyOnce     sync.Once
-	restartCodexAppServerCall  func(context.Context) error
 	codexAccountStoreCall      func() (*codexauth.Store, error)
 	stopManagedHostCall        func(context.Context, string) error
 	startManagedHostCall       func(context.Context, string) error

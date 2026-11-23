@@ -1540,8 +1540,8 @@ func TestTerminalOutboxSuppressesFollowerResultAfterAuthorizationRevocation(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	outbox.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
-		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	outbox.deliveryDecision = func(entry *terminalOutboxEntry) (bool, string) {
+		return h.terminalOutboxDeliveryAllowed(registry, entry), ""
 	}
 	entry, err := outbox.enqueue(terminalOutboxDraft{
 		Route: route, AgentName: "codex", RichResult: true, Text: "不得泄露的最终结果",
@@ -1555,8 +1555,8 @@ func TestTerminalOutboxSuppressesFollowerResultAfterAuthorizationRevocation(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	restarted.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
-		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	restarted.deliveryDecision = func(entry *terminalOutboxEntry) (bool, string) {
+		return h.terminalOutboxDeliveryAllowed(registry, entry), ""
 	}
 
 	registry.UpdateAccessForAccount(platform.PlatformFeishu, "cli_a", nil)
@@ -1685,8 +1685,8 @@ func TestTerminalOutboxWorkerPersistsFollowerResultUntilAttachReady(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	restarted.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
-		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	restarted.deliveryDecision = func(entry *terminalOutboxEntry) (bool, string) {
+		return h.terminalOutboxDeliveryAllowed(registry, entry), ""
 	}
 	if err := restarted.attempt(context.Background(), entry.ID, nil); err != nil {
 		t.Fatal(err)
@@ -1819,8 +1819,8 @@ func TestTerminalOutboxRevocationWaitsForStartedFollowerDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outbox.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
-		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	outbox.deliveryDecision = func(entry *terminalOutboxEntry) (bool, string) {
+		return h.terminalOutboxDeliveryAllowed(registry, entry), ""
 	}
 	outbox.deliveryBarrier = &h.codexFollowerDeliveryMu
 	started := make(chan struct{})
@@ -1896,8 +1896,8 @@ func TestTerminalOutboxSuppressesFollowerResultAfterRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outbox.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
-		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	outbox.deliveryDecision = func(entry *terminalOutboxEntry) (bool, string) {
+		return h.terminalOutboxDeliveryAllowed(registry, entry), ""
 	}
 	entry, err := outbox.enqueue(terminalOutboxDraft{
 		Route: route, AgentName: "codex", RichResult: true, Text: "解绑后的最终结果",

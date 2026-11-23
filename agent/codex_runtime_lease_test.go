@@ -464,20 +464,12 @@ func TestCodexRuntimeRemoteRouteHandoffReusesIdleWeClawRuntime(t *testing.T) {
 	if _, err := a.codexOwners.activateRuntime(current, CodexRuntimeWeClaw, state); err != nil {
 		t.Fatal(err)
 	}
-	restarts := 0
-	a.restartCodexAppServerCall = func(context.Context) error {
-		restarts++
-		return nil
-	}
 	next := remoteCodexRuntimeRequest("thread-1", "route-new", 2)
 
 	binding, err := a.HandoffCodexRuntime(context.Background(), next)
 
 	if err != nil || binding.Runtime != CodexRuntimeWeClaw || binding.Control.RouteKey != "route-new" {
 		t.Fatalf("binding=%#v err=%v", binding, err)
-	}
-	if restarts != 0 {
-		t.Fatalf("空闲 WeClaw runtime 不应重启，restarts=%d", restarts)
 	}
 }
 
@@ -800,19 +792,10 @@ func TestHandoffCodexRuntimeReadsNotLoadedWithoutResuming(t *testing.T) {
 			return nil, fmt.Errorf("binding must use only thread/read and thread/turns/list, got %s", method)
 		}
 	}
-	restarted := false
-	a.restartCodexAppServerCall = func(context.Context) error {
-		restarted = true
-		return nil
-	}
-
 	binding, err := a.HandoffCodexRuntime(context.Background(), request)
 
 	if err != nil || binding.Runtime != CodexRuntimeWeClaw || binding.State.ThreadID != "thread-1" {
 		t.Fatalf("binding=%#v error=%v", binding, err)
-	}
-	if restarted {
-		t.Fatal("ordinary frontend binding must not restart the Codex Host")
 	}
 	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/turns/list"}) {
 		t.Fatalf("methods=%v, want metadata and bounded turn page", methods)

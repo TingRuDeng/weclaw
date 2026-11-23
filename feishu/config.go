@@ -17,8 +17,6 @@ import (
 )
 
 const (
-	envAppID                = "WECLAW_FEISHU_APP_ID"
-	envAppSecret            = "WECLAW_FEISHU_APP_SECRET"
 	feishuSDKRequestTimeout = 15 * time.Second
 )
 
@@ -41,15 +39,6 @@ type CredentialRecord struct {
 
 var ErrCredentialsNotFound = errors.New("feishu credentials not found")
 
-// CredentialsPath 返回飞书凭证文件路径。
-func CredentialsPath() (string, error) {
-	home, err := weclawconfig.DataDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, "platforms", "feishu.json"), nil
-}
-
 // CredentialsPathForBot 返回指定飞书机器人的凭证文件路径。
 func CredentialsPathForBot(name string) (string, error) {
 	cleanName, err := normalizeBotName(name)
@@ -61,18 +50,6 @@ func CredentialsPathForBot(name string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, "platforms", "feishu", cleanName+".json"), nil
-}
-
-// SaveCredentials 以 0600 权限保存飞书凭证。
-func SaveCredentials(creds Credentials) error {
-	if err := validateLocalCredentials(creds); err != nil {
-		return err
-	}
-	path, err := CredentialsPath()
-	if err != nil {
-		return err
-	}
-	return writeCredentialsFile(path, creds)
 }
 
 // SaveCredentialsForBot 以 0600 权限保存指定飞书机器人的凭证。
@@ -87,15 +64,6 @@ func SaveCredentialsForBot(name string, creds Credentials) error {
 	return writeCredentialsFile(path, creds)
 }
 
-// LoadCredentials 读取飞书凭证，环境变量优先于文件。
-func LoadCredentials() (Credentials, error) {
-	record, err := LoadCredentialsWithSource()
-	if err != nil {
-		return Credentials{}, err
-	}
-	return record.Credentials, nil
-}
-
 // LoadCredentialsForBot 读取指定飞书机器人的凭证。
 func LoadCredentialsForBot(name string) (Credentials, error) {
 	record, err := LoadCredentialsWithSourceForBot(name)
@@ -103,25 +71,6 @@ func LoadCredentialsForBot(name string) (Credentials, error) {
 		return Credentials{}, err
 	}
 	return record.Credentials, nil
-}
-
-// LoadCredentialsWithSource 读取飞书凭证并返回来源。
-func LoadCredentialsWithSource() (CredentialRecord, error) {
-	if record, ok, err := credentialsFromEnv(); ok || err != nil {
-		return record, err
-	}
-	path, err := CredentialsPath()
-	if err != nil {
-		return CredentialRecord{}, err
-	}
-	record, err := readCredentialsFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return CredentialRecord{}, fmt.Errorf("%w; run `weclaw feishu login --app-id <id> --app-secret <secret>`", ErrCredentialsNotFound)
-		}
-		return CredentialRecord{}, err
-	}
-	return record, nil
 }
 
 // LoadCredentialsWithSourceForBot 读取指定飞书机器人凭证并返回来源。
@@ -182,20 +131,6 @@ func ValidateCredentials(ctx context.Context, creds Credentials) error {
 		return formatFeishuAPIError(creds.AppID, result.Code, result.Msg)
 	}
 	return nil
-}
-
-// credentialsFromEnv 从环境变量读取凭证；只配置一半时直接报错，避免误用旧文件凭证。
-func credentialsFromEnv() (CredentialRecord, bool, error) {
-	appID := strings.TrimSpace(os.Getenv(envAppID))
-	appSecret := strings.TrimSpace(os.Getenv(envAppSecret))
-	if appID == "" && appSecret == "" {
-		return CredentialRecord{}, false, nil
-	}
-	creds := Credentials{AppID: appID, AppSecret: appSecret}
-	if err := validateLocalCredentials(creds); err != nil {
-		return CredentialRecord{}, true, err
-	}
-	return CredentialRecord{Credentials: creds, Source: "env"}, true, nil
 }
 
 func writeCredentialsFile(path string, creds Credentials) error {

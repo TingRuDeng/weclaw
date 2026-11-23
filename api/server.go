@@ -12,7 +12,6 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/codexauth"
-	"github.com/fastclaw-ai/weclaw/ilink"
 	"github.com/fastclaw-ai/weclaw/internal/auththrottle"
 	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/fastclaw-ai/weclaw/observability"
@@ -28,7 +27,6 @@ const (
 
 // Server provides an HTTP API for sending messages.
 type Server struct {
-	clients  []*ilink.Client
 	registry *platform.Registry
 	status   RuntimeStatusProvider
 	drain    RuntimeDrainController
@@ -156,11 +154,11 @@ func WithTerminalOutboxController(controller TerminalOutboxController) Option {
 }
 
 // NewServer creates an API server.
-func NewServer(clients []*ilink.Client, addr string, options ...Option) *Server {
+func NewServer(addr string, options ...Option) *Server {
 	if addr == "" {
 		addr = "127.0.0.1:18011"
 	}
-	server := &Server{clients: clients, addr: addr, sendAuth: auththrottle.New()}
+	server := &Server{addr: addr, sendAuth: auththrottle.New()}
 	for _, option := range options {
 		option(server)
 	}

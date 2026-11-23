@@ -180,32 +180,6 @@ func (s *progressSession) nativeProgressReadyError() error {
 
 const progressSupersededNotice = "已在新位置继续展示；后续结构化进展将更新到新卡片，最终结果会另发独立结果卡片。"
 
-// startProgressSession 启动平台进度会话，保持旧语义：最终回复由调用方单独发送。
-func (h *Handler) startProgressSession(ctx context.Context, reply platform.Replier, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func()) {
-	onProgress, finish := h.startProgressSessionWithFinal(ctx, reply, prefix, taskText, cfg)
-	return onProgress, func() {
-		_ = finish(progressDefaultCompletion, false)
-	}
-}
-
-// startProgressSessionWithFinal 启动进度会话；各平台能力决定终态只收敛卡片状态还是同时承载最终结果。
-func (h *Handler) startProgressSessionWithFinal(ctx context.Context, reply platform.Replier, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool) {
-	return h.startProgressSessionForAgentWithFinal(ctx, reply, prefix, "", taskText, cfg)
-}
-
-// startProgressSessionForAgentWithFinal 为任务卡标题补充 Agent 来源，正文和最终结果保持原样。
-func (h *Handler) startProgressSessionForAgentWithFinal(ctx context.Context, reply platform.Replier, prefix string, agentName string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool) {
-	return h.startProgressSessionForWorkspaceAgentWithFinal(ctx, reply, prefix, agentName, "", taskText, cfg)
-}
-
-// startProgressSessionForWorkspaceAgentWithFinal 使用任务启动时的工作空间快照生成稳定标题。
-func (h *Handler) startProgressSessionForWorkspaceAgentWithFinal(ctx context.Context, reply platform.Replier, prefix string, agentName string, workspaceRoot string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool) {
-	onProgress, finish, _ := h.startProgressSessionForWorkspaceAgentWithHandle(
-		ctx, reply, prefix, agentName, workspaceRoot, taskText, cfg,
-	)
-	return onProgress, finish
-}
-
 // startProgressSessionForWorkspaceAgentWithHandle 额外返回内部会话，供终态 outbox 在网络写入前导出 checkpoint。
 func (h *Handler) startProgressSessionForWorkspaceAgentWithHandle(ctx context.Context, reply platform.Replier, prefix string, agentName string, workspaceRoot string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool, *progressSession) {
 	return h.startProgressSessionForWorkspaceAgentWithGuard(ctx, reply, prefix, agentName, workspaceRoot, taskText, cfg, terminalDeliveryGuard{})

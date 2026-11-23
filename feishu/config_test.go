@@ -11,62 +11,6 @@ import (
 	"testing"
 )
 
-func TestSaveAndLoadCredentialsUsesSecureFile(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	creds := Credentials{AppID: "cli_a", AppSecret: "secret-a"}
-
-	if err := SaveCredentials(creds); err != nil {
-		t.Fatalf("SaveCredentials error: %v", err)
-	}
-	path, err := CredentialsPath()
-	if err != nil {
-		t.Fatalf("CredentialsPath error: %v", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat credentials: %v", err)
-	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Fatalf("credentials mode=%o, want 600", mode)
-	}
-	loaded, err := LoadCredentials()
-	if err != nil {
-		t.Fatalf("LoadCredentials error: %v", err)
-	}
-	if loaded != creds {
-		t.Fatalf("credentials=%#v, want %#v", loaded, creds)
-	}
-}
-
-func TestSaveCredentialsRepairsExistingFilePermissions(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	path, err := CredentialsPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(`{"app_id":"old","app_secret":"old-secret"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := SaveCredentials(Credentials{AppID: "new", AppSecret: "new-secret"}); err != nil {
-		t.Fatalf("SaveCredentials error: %v", err)
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Fatalf("credentials mode=%o, want 600", mode)
-	}
-}
-
 func TestLoadCredentialsForBotRepairsOwnedPermissionsBeforeReading(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -109,68 +53,6 @@ func TestLoadCredentialsForBotRepairsOwnedPermissionsBeforeReading(t *testing.T)
 	}
 	if string(got) != string(content) {
 		t.Fatalf("credentials content changed: %q", got)
-	}
-}
-
-func TestLoadCredentialsRepairsInsecureFilePermissions(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	path, err := CredentialsPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(`{"app_id":"cli_a","app_secret":"secret-a"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := LoadCredentials(); err != nil {
-		t.Fatalf("LoadCredentials error=%v, want insecure file permissions repaired", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Fatalf("credentials mode=%o, want 600 after repair", mode)
-	}
-}
-
-func TestCredentialsRejectSymlinkTarget(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	path, err := CredentialsPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(home, "outside.json")
-	original := []byte(`{"app_id":"outside","app_secret":"unchanged"}`)
-	if err := os.WriteFile(target, original, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, path); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := LoadCredentials(); err == nil {
-		t.Fatal("LoadCredentials should reject a symlink credentials path")
-	}
-	if err := SaveCredentials(Credentials{AppID: "cli_a", AppSecret: "secret-a"}); err == nil {
-		t.Fatal("SaveCredentials should reject a symlink credentials path")
-	}
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != string(original) {
-		t.Fatalf("symlink target changed: %q", data)
 	}
 }
 
@@ -217,33 +99,6 @@ func TestCredentialsPathForBotRejectsUnsafeName(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "invalid feishu bot name") {
 		t.Fatalf("CredentialsPathForBot error=%v, want invalid name", err)
-	}
-}
-
-func TestLoadCredentialsPrefersEnvironment(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv(envAppID, "cli_env")
-	t.Setenv(envAppSecret, "secret-env")
-	if err := SaveCredentials(Credentials{AppID: "cli_file", AppSecret: "secret-file"}); err != nil {
-		t.Fatalf("SaveCredentials error: %v", err)
-	}
-
-	record, err := LoadCredentialsWithSource()
-	if err != nil {
-		t.Fatalf("LoadCredentialsWithSource error: %v", err)
-	}
-	if record.Source != "env" || record.Credentials.AppID != "cli_env" {
-		t.Fatalf("record=%#v, want env credentials", record)
-	}
-}
-
-func TestLoadCredentialsMissingFileReportsLoginHint(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	_, err := LoadCredentials()
-
-	if err == nil || !strings.Contains(err.Error(), "weclaw feishu login") {
-		t.Fatalf("LoadCredentials error=%v, want login hint", err)
 	}
 }
 
@@ -316,19 +171,5 @@ func TestValidateCredentialsPermissionErrorUsesUnifiedClassifier(t *testing.T) {
 
 	if !IsPermissionError(err) {
 		t.Fatalf("ValidateCredentials error=%v, want unified permission error", err)
-	}
-}
-
-func TestCredentialsPathUsesWeclawPlatformsDir(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	path, err := CredentialsPath()
-	if err != nil {
-		t.Fatalf("CredentialsPath error: %v", err)
-	}
-	want := filepath.Join(home, ".weclaw", "platforms", "feishu.json")
-	if path != want {
-		t.Fatalf("path=%q, want %q", path, want)
 	}
 }

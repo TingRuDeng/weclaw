@@ -21,8 +21,3 @@ func newRemoteMediaHTTPClient() *http.Client {
 func validateRemoteMediaURL(rawURL string) error {
 	return remotefetch.ValidateURL(rawURL)
 }
-
-// readRemoteMediaBody 兼容 messaging 原有测试入口，统一复用大小限制逻辑。
-func readRemoteMediaBody(resp *http.Response, maxBytes int64) ([]byte, error) {
-	return remotefetch.ReadBody(resp, maxBytes)
-}

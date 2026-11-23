@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/fastclaw-ai/weclaw/internal/remotefetch"
 )
 
 func TestExtractImageURLs(t *testing.T) {
@@ -112,9 +114,9 @@ func TestReadRemoteMediaBodyRejectsLargeContentLength(t *testing.T) {
 		ContentLength: 9,
 	}
 
-	_, err := readRemoteMediaBody(resp, 8)
+	_, err := remotefetch.ReadBody(resp, 8)
 	if err == nil {
-		t.Fatal("readRemoteMediaBody() error = nil, want content length rejection")
+		t.Fatal("ReadBody() error = nil, want content length rejection")
 	}
 }
 
@@ -124,9 +126,9 @@ func TestReadRemoteMediaBodyRejectsBodyAboveLimit(t *testing.T) {
 		ContentLength: -1,
 	}
 
-	_, err := readRemoteMediaBody(resp, 8)
+	_, err := remotefetch.ReadBody(resp, 8)
 	if err == nil {
-		t.Fatal("readRemoteMediaBody() error = nil, want body size rejection")
+		t.Fatal("ReadBody() error = nil, want body size rejection")
 	}
 }
 

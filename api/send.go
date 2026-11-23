@@ -14,7 +14,6 @@ import (
 	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
-	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
 const maxSendRequestBytes = 1 * 1024 * 1024
@@ -105,11 +104,8 @@ func decodeSendRequest(w http.ResponseWriter, r *http.Request) (SendRequest, boo
 
 func (s *Server) replierFor(w http.ResponseWriter, req SendRequest) (platform.Replier, bool) {
 	if s.registry == nil {
-		if len(s.clients) == 0 {
-			http.Error(w, "no accounts configured", http.StatusServiceUnavailable)
-			return nil, false
-		}
-		return wechat.NewReplier(s.clients[0], req.To, "", ""), true
+		http.Error(w, "no accounts configured", http.StatusServiceUnavailable)
+		return nil, false
 	}
 	platformName := platform.PlatformName(strings.TrimSpace(req.Platform))
 	if platformName == "" {

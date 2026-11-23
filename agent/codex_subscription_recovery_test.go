@@ -215,7 +215,25 @@ func TestCodexAdmittedWatcherSubscribesWhileMaintenanceDrains(t *testing.T) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
-				err := a.ensureCodexAppServerGate().drain(ctx, func(context.Context) error { return nil })
+				gate := a.ensureCodexAppServerGate()
+				var err error
+				for {
+					err = gate.beginExclusive()
+					if err == nil {
+						gate.finishExclusive(false, true)
+						break
+					}
+					if !errors.Is(err, ErrCodexWriterBusy) {
+						break
+					}
+					select {
+					case <-ctx.Done():
+						err = ctx.Err()
+					case <-time.After(time.Millisecond):
+						continue
+					}
+					break
+				}
 				a.codexAdmissionMu.Unlock()
 				maintenanceDone <- err
 			}()

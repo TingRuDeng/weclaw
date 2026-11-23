@@ -144,7 +144,7 @@ func (r *Replier) Typing(ctx context.Context, on bool) error {
 }
 
 func (r *Replier) OpenStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
-	return &textStream{reply: r}, nil
+	return nil, platform.ErrUnsupported
 }
 
 func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platform.Choice) error {
@@ -185,52 +185,6 @@ func (r *Replier) sendPlainText(ctx context.Context, plainText string, clientID 
 // NewClientID 生成微信出站消息 client_id。
 func NewClientID() string {
 	return weclawClientIDPrefix + uuid.New().String()
-}
-
-type textStream struct {
-	reply  *Replier
-	mu     sync.Mutex
-	closed bool
-}
-
-func (s *textStream) Update(ctx context.Context, content string) error {
-	s.mu.Lock()
-	closed := s.closed
-	s.mu.Unlock()
-	if closed {
-		return nil
-	}
-	if err := s.reply.Typing(ctx, true); err != nil {
-		return err
-	}
-	return s.reply.SendText(ctx, content)
-}
-
-func (s *textStream) Complete(ctx context.Context, finalContent string) error {
-	if !s.beginTerminal() {
-		return nil
-	}
-	if err := s.reply.SendText(ctx, finalContent); err != nil {
-		return err
-	}
-	return s.reply.Typing(ctx, false)
-}
-
-func (s *textStream) Fail(ctx context.Context, errText string) error {
-	if !s.beginTerminal() {
-		return nil
-	}
-	return s.reply.SendText(ctx, errText)
-}
-
-func (s *textStream) beginTerminal() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return false
-	}
-	s.closed = true
-	return true
 }
 
 func splitTextReplyChunks(text string, maxRunes int) []string {

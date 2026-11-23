@@ -30,7 +30,7 @@ func (stub *terminalOutboxControllerStub) RedriveTerminalOutbox(_ context.Contex
 
 func TestTerminalOutboxAPIRequiresLoopbackAndToken(t *testing.T) {
 	stub := &terminalOutboxControllerStub{}
-	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret"), WithTerminalOutboxController(stub))
+	server := NewServer("127.0.0.1:18011", WithToken("secret"), WithTerminalOutboxController(stub))
 	remote := httptest.NewRequest(http.MethodGet, "/api/terminal-outbox", nil)
 	remote.Host = "127.0.0.1:18011"
 	remote.RemoteAddr = "203.0.113.8:43210"
@@ -55,7 +55,7 @@ func TestTerminalOutboxAPIRedriveMapsIDAndNotFound(t *testing.T) {
 	stub := &terminalOutboxControllerStub{
 		status: messaging.TerminalOutboxStatus{Pending: 1},
 	}
-	server := NewServer(nil, "127.0.0.1:18011", WithTerminalOutboxController(stub))
+	server := NewServer("127.0.0.1:18011", WithTerminalOutboxController(stub))
 	req := httptest.NewRequest(http.MethodPost, "/api/terminal-outbox/redrive", strings.NewReader(`{"id":"entry-1"}`))
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "127.0.0.1:43210"
@@ -78,7 +78,7 @@ func TestTerminalOutboxAPIRedriveMapsIDAndNotFound(t *testing.T) {
 
 func TestTerminalOutboxAPIHidesInternalErrors(t *testing.T) {
 	stub := &terminalOutboxControllerStub{redriveErr: errors.New("token=private-secret")}
-	server := NewServer(nil, "127.0.0.1:18011", WithTerminalOutboxController(stub))
+	server := NewServer("127.0.0.1:18011", WithTerminalOutboxController(stub))
 	req := httptest.NewRequest(http.MethodPost, "/api/terminal-outbox/redrive", strings.NewReader(`{"id":""}`))
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "127.0.0.1:43210"

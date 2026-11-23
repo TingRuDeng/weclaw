@@ -140,7 +140,6 @@ type codexShortSelectionRequest struct {
 	Agent              agent.Agent
 	BindingKey         string
 	Target             string
-	OwnerBindingKey    string
 	Platform           platform.PlatformName
 	AccountID          string
 	Reply              platform.Replier
@@ -158,7 +157,6 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 			ActorUserID:        req.ActorUserID,
 			AuthorizedIdentity: req.AuthorizedIdentity,
 			BindingKey:         req.BindingKey,
-			OwnerBindingKey:    req.OwnerBindingKey,
 			AgentName:          req.AgentName,
 			Target:             req.Target,
 			Agent:              req.Agent,
@@ -172,7 +170,7 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 		return textNavigationResult(h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
 			ctx: ctx, userID: req.UserID, agentName: req.AgentName,
 			workspaceRoot: req.WorkspaceRoot, agent: req.Agent,
-			target: req.Target, ownerBindingKey: req.OwnerBindingKey,
+			target: req.Target,
 			options: codexSwitchOptions{
 				actorUserID: req.ActorUserID, authorizedIdentity: req.AuthorizedIdentity, platform: req.Platform,
 				accountID: req.AccountID, reply: req.Reply,
@@ -187,7 +185,6 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 		ActorUserID:        req.ActorUserID,
 		AuthorizedIdentity: req.AuthorizedIdentity,
 		BindingKey:         req.BindingKey,
-		OwnerBindingKey:    req.OwnerBindingKey,
 		AgentName:          req.AgentName,
 		Target:             req.Target,
 		Agent:              req.Agent,

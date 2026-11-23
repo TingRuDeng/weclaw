@@ -26,7 +26,7 @@ func TestAPIHTTPServerHasSlowClientTimeouts(t *testing.T) {
 }
 
 func TestHandleSendRequiresConfiguredToken(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret-token"))
+	server := NewServer("127.0.0.1:18011", WithToken("secret-token"))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"to":"u","text":"hi"}`))
 	rec := httptest.NewRecorder()
@@ -38,7 +38,7 @@ func TestHandleSendRequiresConfiguredToken(t *testing.T) {
 }
 
 func TestHandleSendRateLimitsFailedAuthenticationByRemoteAddr(t *testing.T) {
-	server := NewServer(nil, "0.0.0.0:18011", WithToken("secret-token"))
+	server := NewServer("0.0.0.0:18011", WithToken("secret-token"))
 
 	for i := 0; i < auththrottle.DefaultMaxFailures; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"to":"u","text":"hi"}`))
@@ -71,7 +71,7 @@ func TestHandleSendRateLimitsFailedAuthenticationByRemoteAddr(t *testing.T) {
 }
 
 func TestHandleSendAcceptsBearerToken(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret-token"))
+	server := NewServer("127.0.0.1:18011", WithToken("secret-token"))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"to":"u","text":"hi"}`))
 	req.Header.Set("Authorization", "Bearer secret-token")
@@ -84,7 +84,7 @@ func TestHandleSendAcceptsBearerToken(t *testing.T) {
 }
 
 func TestHandleSendAcceptsHeaderToken(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret-token"))
+	server := NewServer("127.0.0.1:18011", WithToken("secret-token"))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"to":"u","text":"hi"}`))
 	req.Header.Set("X-WeClaw-Token", "secret-token")
@@ -97,7 +97,7 @@ func TestHandleSendAcceptsHeaderToken(t *testing.T) {
 }
 
 func TestHandleRuntimeStatusReturnsActiveTaskCount(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeStatusProvider(staticRuntimeStatus{active: 2}))
+	server := NewServer("127.0.0.1:18011", WithRuntimeStatusProvider(staticRuntimeStatus{active: 2}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
 	req.Host = "127.0.0.1:18011"
@@ -120,7 +120,7 @@ func TestHandleRuntimeStatusReturnsActiveTaskCount(t *testing.T) {
 }
 
 func TestHandleRuntimeStatusRequiresTokenWhenConfigured(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret-token"))
+	server := NewServer("127.0.0.1:18011", WithToken("secret-token"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
 	rec := httptest.NewRecorder()
@@ -133,7 +133,7 @@ func TestHandleRuntimeStatusRequiresTokenWhenConfigured(t *testing.T) {
 
 func TestHandleCodexCLIPrepareUsesLocalController(t *testing.T) {
 	control := &staticCodexCLIControl{host: agent.CodexCLIHost{SocketPath: "/tmp/shared.sock"}}
-	server := NewServer(nil, "127.0.0.1:18011", WithCodexCLIHostController(control))
+	server := NewServer("127.0.0.1:18011", WithCodexCLIHostController(control))
 	req := httptest.NewRequest(http.MethodPost, "/api/codex/cli/prepare", nil)
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "127.0.0.1:40001"
@@ -147,7 +147,7 @@ func TestHandleCodexCLIPrepareUsesLocalController(t *testing.T) {
 }
 
 func TestHandleCodexCLIPrepareRejectsNonLocalCaller(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011", WithCodexCLIHostController(&staticCodexCLIControl{}))
+	server := NewServer("127.0.0.1:18011", WithCodexCLIHostController(&staticCodexCLIControl{}))
 	req := httptest.NewRequest(http.MethodPost, "/api/codex/cli/prepare", nil)
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "203.0.113.10:40001"
@@ -162,7 +162,7 @@ func TestHandleCodexCLIPrepareRejectsNonLocalCaller(t *testing.T) {
 
 func TestHandleRuntimeDrainStartsAndCancelsAuthenticatedDrain(t *testing.T) {
 	control := &staticRuntimeControl{result: messaging.RuntimeDrainResult{ActiveTasks: 1, RemainingTasks: 0}}
-	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeDrainController(control))
+	server := NewServer("127.0.0.1:18011", WithRuntimeDrainController(control))
 
 	start := httptest.NewRequest(http.MethodPost, "/api/runtime/drain?force=true", nil)
 	start.Host = "127.0.0.1:18011"
@@ -188,7 +188,7 @@ func TestHandleRuntimeDrainReportsActiveTaskConflict(t *testing.T) {
 		result: messaging.RuntimeDrainResult{ActiveTasks: 2, RemainingTasks: 2},
 		err:    messaging.ErrActiveTasksRunning,
 	}
-	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeDrainController(control))
+	server := NewServer("127.0.0.1:18011", WithRuntimeDrainController(control))
 	req := httptest.NewRequest(http.MethodPost, "/api/runtime/drain", nil)
 	req.Host = "127.0.0.1:18011"
 	req.RemoteAddr = "127.0.0.1:40001"
@@ -204,7 +204,7 @@ func TestHandleRuntimeRestartPreparesAndCancelsTransaction(t *testing.T) {
 		ActiveTasks: 1, Codex: true,
 		CodexHost: agent.CodexRestartSnapshot{HostMode: "daemon", HostGeneration: 9, HostStopped: true},
 	}}
-	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	server := NewServer("127.0.0.1:18011", WithRuntimeRestartController(control))
 	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?force_drain=true", nil)
 	request.Host = "127.0.0.1:18011"
 	request.RemoteAddr = "127.0.0.1:40001"
@@ -226,7 +226,7 @@ func TestHandleRuntimeRestartPreparesAndCancelsTransaction(t *testing.T) {
 
 func TestHandleRuntimeRestartPassesConflictingHostAuthorization(t *testing.T) {
 	control := &staticRuntimeRestartOptionsControl{}
-	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	server := NewServer("127.0.0.1:18011", WithRuntimeRestartController(control))
 	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?stop_conflicting_codex_hosts=true", nil)
 	request.Host = "127.0.0.1:18011"
 	request.RemoteAddr = "127.0.0.1:40001"
@@ -239,7 +239,7 @@ func TestHandleRuntimeRestartPassesConflictingHostAuthorization(t *testing.T) {
 
 func TestHandleRuntimeRestartSeparatesTaskDrainFromCodexTermination(t *testing.T) {
 	control := &staticRuntimeRestartOptionsControl{}
-	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	server := NewServer("127.0.0.1:18011", WithRuntimeRestartController(control))
 	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?force_drain=true", nil)
 	request.Host = "127.0.0.1:18011"
 	request.RemoteAddr = "127.0.0.1:40001"
@@ -254,7 +254,7 @@ func TestHandleRuntimeRestartSeparatesTaskDrainFromCodexTermination(t *testing.T
 
 func TestHandleRuntimeRestartOperatorForceAuthorizesDrainAndCodexTermination(t *testing.T) {
 	control := &staticRuntimeRestartOptionsControl{}
-	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	server := NewServer("127.0.0.1:18011", WithRuntimeRestartController(control))
 	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?force=true", nil)
 	request.Host = "127.0.0.1:18011"
 	request.RemoteAddr = "127.0.0.1:40001"
@@ -271,7 +271,7 @@ func TestHandleRuntimeRestartReportsCodexBlocker(t *testing.T) {
 	control := &staticRuntimeRestartControl{err: fmt.Errorf(
 		"%w: %w", messaging.ErrRuntimeRestartBlocked, agent.ErrCodexDesktopFrontendActive,
 	)}
-	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	server := NewServer("127.0.0.1:18011", WithRuntimeRestartController(control))
 	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare", nil)
 	request.Host = "127.0.0.1:18011"
 	request.RemoteAddr = "127.0.0.1:40001"
@@ -284,7 +284,7 @@ func TestHandleRuntimeRestartReportsCodexBlocker(t *testing.T) {
 
 func TestHandleRuntimeRestartMarksUnknownHostStopOutcome(t *testing.T) {
 	control := &staticRuntimeRestartOptionsControl{staticRuntimeRestartControl: staticRuntimeRestartControl{err: agent.ErrCodexRestartUnsafe}}
-	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	server := NewServer("127.0.0.1:18011", WithRuntimeRestartController(control))
 	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?force=true", nil)
 	request.Host = "127.0.0.1:18011"
 	request.RemoteAddr = "127.0.0.1:40001"
@@ -299,7 +299,7 @@ func TestHandleRuntimeRestartMarksUnknownHostStopOutcome(t *testing.T) {
 }
 
 func TestAuthorizeReadRejectsExternalHostWithoutToken(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011")
+	server := NewServer("127.0.0.1:18011")
 	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
 	req.Host = "attacker.example:18011"
 	rec := httptest.NewRecorder()
@@ -313,7 +313,7 @@ func TestAuthorizeReadRejectsExternalHostWithoutToken(t *testing.T) {
 }
 
 func TestAuthorizeReadRejectsCrossOriginWithoutToken(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011")
+	server := NewServer("127.0.0.1:18011")
 	req := httptest.NewRequest(http.MethodPost, "/api/send", nil)
 	req.Host = "127.0.0.1:18011"
 	req.Header.Set("Origin", "http://127.0.0.1:3000")
@@ -328,7 +328,7 @@ func TestAuthorizeReadRejectsCrossOriginWithoutToken(t *testing.T) {
 }
 
 func TestAuthorizeReadAllowsLoopbackHostWithoutToken(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011")
+	server := NewServer("127.0.0.1:18011")
 	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
 	req.Host = "localhost:18011"
 	rec := httptest.NewRecorder()
@@ -348,7 +348,7 @@ func TestHandleSendUsesRegistryTarget(t *testing.T) {
 		},
 		Access: platform.NewAccessControl([]string{"ignored"}),
 	}})
-	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+	server := NewServer("127.0.0.1:18011", WithRegistry(registry))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"platform":"feishu","account_id":"cli_a","to":"ou_user","text":"hi"}`))
 	req.Host = "127.0.0.1:18011"
@@ -369,7 +369,7 @@ func TestHandleSendReportsPartialSuccessWhenMediaFailsAfterText(t *testing.T) {
 		Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: reply},
 		Access:   platform.NewAccessControl([]string{"ignored"}),
 	}})
-	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+	server := NewServer("127.0.0.1:18011", WithRegistry(registry))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(
 		`{"platform":"feishu","account_id":"cli_a","to":"ou_user","text":"hi","media_url":"https://example.com/image.png"}`,
@@ -403,7 +403,7 @@ func TestHandleSendReportsPartialSuccessWhenExtractedImageFailsAfterText(t *test
 		Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: reply},
 		Access:   platform.NewAccessControl([]string{"ignored"}),
 	}})
-	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+	server := NewServer("127.0.0.1:18011", WithRegistry(registry))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(
 		`{"platform":"feishu","account_id":"cli_a","to":"ou_user","text":"hi ![image](https://example.com/image.png)"}`,
@@ -433,7 +433,7 @@ func TestHandleSendReportsSuccessfulMediaWhenOnlySomeExtractedImagesFail(t *test
 		Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: reply},
 		Access:   platform.NewAccessControl([]string{"ignored"}),
 	}})
-	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+	server := NewServer("127.0.0.1:18011", WithRegistry(registry))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(
 		`{"platform":"feishu","account_id":"cli_a","to":"ou_user","text":"![one](https://example.com/one.png) ![two](https://example.com/two.png)"}`,
@@ -478,7 +478,7 @@ func TestHandleSendLogDoesNotContainMessageBody(t *testing.T) {
 		Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: reply},
 		Access:   platform.NewAccessControl([]string{"ignored"}),
 	}})
-	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+	server := NewServer("127.0.0.1:18011", WithRegistry(registry))
 	var logs bytes.Buffer
 	oldOutput := log.Writer()
 	log.SetOutput(&logs)
@@ -503,7 +503,7 @@ func TestHandleSendDoesNotExposeProviderError(t *testing.T) {
 		Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: reply},
 		Access:   platform.NewAccessControl([]string{"ignored"}),
 	}})
-	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+	server := NewServer("127.0.0.1:18011", WithRegistry(registry))
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"platform":"feishu","account_id":"cli_a","to":"ou_user","media_url":"https://example.com/a.png"}`))
 	req.Host = "127.0.0.1:18011"
 	rec := httptest.NewRecorder()
@@ -529,7 +529,7 @@ func TestHandleSendRequiresAccountIDWhenPlatformHasMultipleAccounts(t *testing.T
 			Access:   platform.NewAccessControl([]string{"ignored"}),
 		},
 	})
-	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+	server := NewServer("127.0.0.1:18011", WithRegistry(registry))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"platform":"feishu","to":"ou_user","text":"hi"}`))
 	req.Host = "127.0.0.1:18011"
@@ -545,7 +545,7 @@ func TestHandleSendRequiresAccountIDWhenPlatformHasMultipleAccounts(t *testing.T
 }
 
 func TestHandleSendReturnsUnavailableForMissingRegistryTarget(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(platform.NewRegistry(nil)))
+	server := NewServer("127.0.0.1:18011", WithRegistry(platform.NewRegistry(nil)))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"platform":"feishu","to":"ou_user","text":"hi"}`))
 	req.Host = "127.0.0.1:18011"
@@ -558,7 +558,7 @@ func TestHandleSendReturnsUnavailableForMissingRegistryTarget(t *testing.T) {
 }
 
 func TestHandleSendRejectsOversizedBody(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011")
+	server := NewServer("127.0.0.1:18011")
 	body := `{"to":"u","text":"` + strings.Repeat("x", maxSendRequestBytes) + `"}`
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(body))
@@ -745,7 +745,7 @@ func (r *recordingReplier) AskChoices(ctx context.Context, prompt string, choice
 }
 
 func TestValidateRejectsNonLoopbackListenWithoutToken(t *testing.T) {
-	server := NewServer(nil, "0.0.0.0:18011")
+	server := NewServer("0.0.0.0:18011")
 
 	if err := server.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want non-loopback rejection")
@@ -753,7 +753,7 @@ func TestValidateRejectsNonLoopbackListenWithoutToken(t *testing.T) {
 }
 
 func TestValidateAllowsLoopbackListenWithoutToken(t *testing.T) {
-	server := NewServer(nil, "127.0.0.1:18011")
+	server := NewServer("127.0.0.1:18011")
 
 	if err := server.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v, want nil", err)
@@ -761,7 +761,7 @@ func TestValidateAllowsLoopbackListenWithoutToken(t *testing.T) {
 }
 
 func TestValidateAllowsNonLoopbackListenWithToken(t *testing.T) {
-	server := NewServer(nil, "0.0.0.0:18011", WithToken("secret-token"))
+	server := NewServer("0.0.0.0:18011", WithToken("secret-token"))
 
 	if err := server.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v, want nil", err)

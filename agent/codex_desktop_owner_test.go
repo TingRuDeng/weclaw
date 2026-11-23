@@ -304,7 +304,6 @@ func TestHandoffCodexRuntimeRemoteRefreshesReleasedThread(t *testing.T) {
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: probe})
-	a.restartCodexAppServerCall = func(context.Context) error { return nil }
 	a.rpcCall = codexHandoffRPCFake(t, "thread-1", "turn-1")
 	req := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	req.Checkpoint = CodexRolloutCheckpoint{
@@ -340,7 +339,6 @@ func TestHandoffCodexRuntimeRemoteRecoversWhenDesktopOwnershipIsUnknown(t *testi
 			a := newACPAgent(ACPAgentConfig{
 				Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
 			}, acpAgentOptions{desktopProbe: probe})
-			a.restartCodexAppServerCall = func(context.Context) error { return nil }
 			a.rpcCall = codexHandoffRPCFake(t, "thread-1", "turn-1")
 			req := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 			req.Checkpoint = CodexRolloutCheckpoint{
@@ -372,7 +370,6 @@ func TestHandoffCodexRuntimeRemoteRecoversPendingFirstTurnWithoutCheckpoint(t *t
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: probe})
-	a.restartCodexAppServerCall = func(context.Context) error { return nil }
 	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
 		switch method {
 		case "thread/resume":
@@ -401,7 +398,6 @@ func TestHandoffCodexRuntimeRemoteDoesNotLetCheckpointVetoOwner(t *testing.T) {
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: probe})
-	a.restartCodexAppServerCall = func(context.Context) error { return nil }
 	a.rpcCall = codexHandoffRPCFake(t, "thread-old", "turn-1")
 	req := remoteCodexRuntimeRequest("thread-old", "route-1", 1)
 
@@ -420,11 +416,6 @@ func TestHandoffCodexRuntimeDoesNotRestartHostForPartialCheckpoint(t *testing.T)
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: probe})
-	restarted := false
-	a.restartCodexAppServerCall = func(context.Context) error {
-		restarted = true
-		return nil
-	}
 	var methods []string
 	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
 		methods = append(methods, method)
@@ -442,8 +433,8 @@ func TestHandoffCodexRuntimeDoesNotRestartHostForPartialCheckpoint(t *testing.T)
 
 	binding, err := a.HandoffCodexRuntime(context.Background(), req)
 
-	if err != nil || restarted || binding.Runtime != CodexRuntimeWeClaw {
-		t.Fatalf("binding=%#v error=%v restarted=%v", binding, err, restarted)
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw {
+		t.Fatalf("binding=%#v error=%v", binding, err)
 	}
 	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/turns/list"}) {
 		t.Fatalf("methods=%v, want read-only handoff", methods)
@@ -459,19 +450,11 @@ func TestDesktopBridgeDoesNotFallbackWhileCodexAppIsPresent(t *testing.T) {
 		CodexHostMode: "managed", StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
 	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
-	restarted := false
-	a.restartCodexAppServerCall = func(context.Context) error {
-		restarted = true
-		return nil
-	}
 
 	_, err := a.HandoffCodexRuntime(context.Background(), remoteCodexRuntimeRequest("thread-1", "route-1", 1))
 
 	if !errors.Is(err, ErrCodexDesktopOwnershipUnknown) {
 		t.Fatalf("HandoffCodexRuntime() error = %v, want ownership unknown", err)
-	}
-	if restarted {
-		t.Fatal("running Codex App must prevent fallback to a second app-server")
 	}
 }
 
@@ -484,11 +467,6 @@ func TestOfficialDaemonHandoffReusesClientWhileAnotherTurnIsActive(t *testing.T)
 		CodexHostMode: "daemon", StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
 	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
-	restarted := false
-	a.restartCodexAppServerCall = func(context.Context) error {
-		restarted = true
-		return nil
-	}
 	a.rpcCall = codexHandoffRPCFake(t, "thread-1", "turn-1")
 	req := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	permit, err := a.ensureCodexAppServerGate().acquire(context.Background())
@@ -504,9 +482,6 @@ func TestOfficialDaemonHandoffReusesClientWhileAnotherTurnIsActive(t *testing.T)
 	if err != nil || binding.Runtime != CodexRuntimeWeClaw ||
 		a.threads[req.Ref.ConversationID] != req.Ref.ThreadID {
 		t.Fatalf("binding=%#v threads=%#v error=%v", binding, a.threads, err)
-	}
-	if restarted {
-		t.Fatal("official daemon handoff must not restart the shared client")
 	}
 }
 

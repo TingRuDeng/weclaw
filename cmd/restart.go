@@ -194,18 +194,6 @@ func restartSystemdService() error {
 	return nil
 }
 
-// ensureRestartSafeWithConfig 使用同一配置快照检查运行中任务，避免预检后再次读取磁盘。
-func ensureRestartSafeWithConfig(ctx context.Context, force bool, cfg *config.Config) error {
-	state, err := readRuntimeState()
-	if err != nil || !processExists(state.PID) {
-		return nil
-	}
-	return ensureRestartSafe(ctx, restartSafetyOptions{
-		apiAddr: cfg.APIAddr, apiToken: cfg.APIToken,
-		processExists: true, force: force,
-	})
-}
-
 // weclawIsRunningForRestart 只在 restart 入口判断是否需要执行停止阶段。
 func weclawIsRunningForRestart() bool {
 	pid, err := readPid()

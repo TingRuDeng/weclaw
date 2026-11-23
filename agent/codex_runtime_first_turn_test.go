@@ -16,7 +16,6 @@ func TestRunCodexTurnReplacesMissingPendingFirstTurnEndToEnd(t *testing.T) {
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{loadErr: ErrCodexDesktopNoClient}})
-	a.restartCodexAppServerCall = func(context.Context) error { return nil }
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
 		switch method {
 		case "thread/read":

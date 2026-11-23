@@ -44,9 +44,6 @@ func (h *Handler) resolveCodexRuntimeLocked(ctx context.Context, opts codexRunti
 	}
 	controlCtx, cancel := h.codexThreadControlContext(ctx)
 	defer cancel()
-	if err := h.guardCodexThreadSwitch(opts.route, threadID); err != nil {
-		return codexRuntimeResolution{}, err
-	}
 	liveAgent, ok := opts.ag.(agent.CodexLiveRuntimeAgent)
 	if !ok {
 		return h.resolveLegacyCodexRuntime(controlCtx, opts)
@@ -144,15 +141,6 @@ func (h *Handler) resolveLegacyCodexRuntime(ctx context.Context, opts codexRunti
 
 func (route codexConversationRoute) ref(threadID string) agent.CodexThreadRef {
 	return agent.CodexThreadRef{ConversationID: route.conversationID, ThreadID: threadID}
-}
-
-func (h *Handler) guardCodexThreadSwitch(route codexConversationRoute, targetThreadID string) error {
-	// A frontend binding is a view, not the owner of a running turn. The
-	// previous implementation rejected a switch whenever the same route had an
-	// active task, which made it impossible to browse another session while a
-	// task continued in the background. The handoff path separately retains a
-	// thread that is still used by an active task.
-	return nil
 }
 
 // ensureCodexRuntimeReady 只核对单一 app-server 的真实可用性。消息 route

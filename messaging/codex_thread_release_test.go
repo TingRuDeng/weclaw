@@ -513,28 +513,6 @@ func TestCodexReleasePersistenceFailureKeepsInFlightInteractionAttached(t *testi
 	}
 }
 
-func TestCodexReleaseRollbackDoesNotExposeProvisionalTombstone(t *testing.T) {
-	store := newCodexSessionStore()
-	workspace := t.TempDir()
-	bindingKey := codexBindingKey("feishu:bot:dm:chat:user", "codex")
-	store.setActiveWorkspace(bindingKey, workspace)
-	store.setThread(bindingKey, workspace, "thread-active")
-
-	release, err := store.releaseWorkspaceThread(bindingKey, workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := store.releasedFollowerSnapshots(); len(got) != 0 {
-		t.Fatalf("provisional release leaked to recovery: %#v", got)
-	}
-	if err := store.rollbackWorkspaceThreadRelease(release); err != nil {
-		t.Fatal(err)
-	}
-	if threadID, pending := store.getThread(bindingKey, workspace); threadID != "thread-active" || pending {
-		t.Fatalf("rolled back binding thread=%q pending=%v", threadID, pending)
-	}
-}
-
 func TestDetachCodexFrontendTaskClaimsCardBeforeLateTerminal(t *testing.T) {
 	h := NewHandler(nil, nil)
 	key := buildCodexConversationID("feishu:tenant:dm:chat:user", "codex", "/workspace/project")

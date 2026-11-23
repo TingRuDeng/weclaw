@@ -123,31 +123,3 @@ func (s *codexSessionStore) commitWorkspaceThreadRelease(result codexWorkspaceTh
 	s.bindings = nextBindings
 	return nil
 }
-
-func (s *codexSessionStore) rollbackWorkspaceThreadRelease(result codexWorkspaceThreadReleaseResult) error {
-	if !result.changed {
-		return nil
-	}
-	s.saveMu.Lock()
-	defer s.saveMu.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !sameCodexSessionBinding(s.bindings[result.bindingKey], result.after) {
-		return errCodexRemoteSelectionChanged
-	}
-	nextBindings := cloneCodexSessionBindings(s.bindings)
-	if result.beforeExist {
-		nextBindings[result.bindingKey] = cloneCodexSessionBinding(result.before)
-	} else {
-		delete(nextBindings, result.bindingKey)
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	if err := s.persistCandidate(s.filePath, codexSessionState{
-		Version: codexSessionStateVersion, Bindings: nextBindings,
-		Archived: sortedCodexArchivedThreadIDs(s.archived), Updated: now,
-	}); err != nil {
-		return fmt.Errorf("回滚 Codex 会话解绑: %w", err)
-	}
-	s.bindings = nextBindings
-	return nil
-}

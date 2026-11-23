@@ -229,7 +229,6 @@ type terminalOutbox struct {
 	trace            observability.Recorder
 	maxEntries       int
 	maxAttempts      int
-	deliveryAllowed  func(*terminalOutboxEntry) bool
 	deliveryDecision func(*terminalOutboxEntry) (bool, string)
 	deliveryBarrier  *sync.RWMutex
 	replayDelivered  func(*terminalOutboxEntry) error
@@ -1785,8 +1784,6 @@ func (o *terminalOutbox) attempt(parent context.Context, id string, preferred pl
 	allowed, reason := true, ""
 	if o.deliveryDecision != nil {
 		allowed, reason = o.deliveryDecision(entry)
-	} else if o.deliveryAllowed != nil {
-		allowed = o.deliveryAllowed(entry)
 	}
 	if !allowed {
 		if reason == "attach_not_ready" {

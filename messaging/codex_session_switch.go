@@ -28,7 +28,6 @@ type codexSwitchRequest struct {
 	workspaceRoot   string
 	agent           agent.Agent
 	target          string
-	ownerBindingKey string
 	options         codexSwitchOptions
 }
 
