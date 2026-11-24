@@ -9,9 +9,7 @@ import (
 
 type codexWriterLeaseState struct {
 	runtimeGeneration    uint64
-	controlRevision      uint64
 	runtime              CodexRuntimeHolder
-	routeKey             string
 	turnID               string
 	candidateDesktopTurn string
 	baselineLastTurnID   string
@@ -46,7 +44,7 @@ func (r *codexRuntimeOwnerRegistry) activateDesktopActiveWriter(
 	conversationRevision uint64,
 	expectedThreadID string,
 ) (CodexThreadBinding, error) {
-	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
+	if err := validateCodexRuntimeRequestRef(req); err != nil {
 		return CodexThreadBinding{}, err
 	}
 	threadID := strings.TrimSpace(req.Ref.ThreadID)
@@ -136,16 +134,13 @@ func (r *codexRuntimeOwnerRegistry) activateRuntimeLocked(
 		return r.threads[threadID], ErrCodexControlChanged
 	}
 	if r.leases[threadID] != nil {
-		if !r.enforceControl {
-			binding := r.threads[threadID]
-			if binding.Runtime != runtime {
-				return binding, ErrCodexWriterBusy
-			}
-			r.conversations[req.Ref.ConversationID] = threadID
-			binding.Ref = req.Ref
-			return binding, nil
+		binding := r.threads[threadID]
+		if binding.Runtime != runtime {
+			return binding, ErrCodexWriterBusy
 		}
-		return r.bindingDuringWriterLease(req, runtime)
+		r.conversations[req.Ref.ConversationID] = threadID
+		binding.Ref = req.Ref
+		return binding, nil
 	}
 	binding := r.threads[threadID]
 	binding = activateCodexBinding(binding, codexBindingActivation{
@@ -156,24 +151,9 @@ func (r *codexRuntimeOwnerRegistry) activateRuntimeLocked(
 	return binding, nil
 }
 
-// bindingDuringWriterLease 允许只读探测返回同一租约快照，但禁止改写运行代次。
-func (r *codexRuntimeOwnerRegistry) bindingDuringWriterLease(req CodexRuntimeRequest, runtime CodexRuntimeHolder) (CodexThreadBinding, error) {
-	binding, ok := r.threads[req.Ref.ThreadID]
-	if !ok || !sameCodexControlIntent(binding.Control, req.Intent) {
-		return CodexThreadBinding{}, ErrCodexControlChanged
-	}
-	if binding.Runtime == CodexRuntimeConflict {
-		return binding, ErrCodexRuntimeConflict
-	}
-	if binding.Runtime != runtime {
-		return binding, ErrCodexWriterBusy
-	}
-	return binding, nil
-}
-
-// beginTurn 原子核对控制 revision、route 和 runtime generation 后创建 writer lease。
+// beginTurn 原子核对 thread 与 runtime 状态后创建 writer lease。
 func (r *codexRuntimeOwnerRegistry) beginTurn(req CodexRuntimeRequest) (*codexWriterLease, error) {
-	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
+	if err := validateCodexRuntimeRequestRef(req); err != nil {
 		return nil, err
 	}
 	r.mu.Lock()
@@ -185,25 +165,18 @@ func (r *codexRuntimeOwnerRegistry) beginTurn(req CodexRuntimeRequest) (*codexWr
 	if r.archivedThreads[req.Ref.ThreadID] {
 		return nil, ErrCodexControlChanged
 	}
-	if r.enforceControl && !sameCodexControlIntent(binding.Control, req.Intent) {
-		return nil, ErrCodexControlChanged
-	}
 	if binding.Runtime == CodexRuntimeConflict {
 		return nil, ErrCodexRuntimeConflict
 	}
-	if r.enforceControl {
-		if binding.Runtime != CodexRuntimeWeClaw && binding.Runtime != CodexRuntimeDesktop {
-			return nil, ErrCodexRuntimeUnavailable
-		}
-	} else if binding.Runtime != CodexRuntimeWeClaw && binding.Runtime != CodexRuntimeDesktop {
+	if binding.Runtime != CodexRuntimeWeClaw && binding.Runtime != CodexRuntimeDesktop {
 		return nil, ErrCodexRuntimeUnavailable
 	}
 	if r.leases[req.Ref.ThreadID] != nil {
 		return nil, ErrCodexWriterBusy
 	}
 	state := &codexWriterLeaseState{
-		runtimeGeneration: binding.RuntimeGeneration, controlRevision: req.Intent.Revision,
-		runtime: binding.Runtime, routeKey: req.Intent.RouteKey,
+		runtimeGeneration:  binding.RuntimeGeneration,
+		runtime:            binding.Runtime,
 		baselineLastTurnID: strings.TrimSpace(binding.State.LastTurnID), conflictCh: make(chan struct{}),
 		resolvedCh: make(chan struct{}),
 	}
@@ -247,7 +220,7 @@ func (r *codexRuntimeOwnerRegistry) bindSharedHostFrontendDuringLeaseAtRevision(
 	conversationRevision uint64,
 	expectedThreadID string,
 ) (CodexThreadBinding, error) {
-	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
+	if err := validateCodexRuntimeRequestRef(req); err != nil {
 		return CodexThreadBinding{}, err
 	}
 	threadID := strings.TrimSpace(req.Ref.ThreadID)
@@ -415,7 +388,7 @@ func (l *codexWriterLease) markUncertain() {
 // latest terminal turn or has advanced beyond the pre-start history baseline.
 // Active or otherwise ambiguous snapshots remain fail-closed.
 func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLease(req CodexRuntimeRequest, state CodexThreadState) (CodexThreadBinding, bool, error) {
-	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
+	if err := validateCodexRuntimeRequestRef(req); err != nil {
 		return CodexThreadBinding{}, false, err
 	}
 	r.mu.Lock()
@@ -431,7 +404,7 @@ func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLeaseAtRevision(
 	conversationRevision uint64,
 	expectedThreadID string,
 ) (CodexThreadBinding, bool, error) {
-	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
+	if err := validateCodexRuntimeRequestRef(req); err != nil {
 		return CodexThreadBinding{}, false, err
 	}
 	r.mu.Lock()
@@ -492,23 +465,16 @@ func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLeaseLocked(
 	return binding, true, nil
 }
 
-// bindingErrorLocked 核对租约创建后的控制 revision、route 与运行代次没有变化。
+// bindingErrorLocked 核对租约创建后的运行代次没有变化。
 func (l *codexWriterLease) bindingErrorLocked() error {
 	binding := l.registry.threads[l.threadID]
-	if l.registry.enforceControl && (binding.Control.Owner != CodexControlRemote || binding.Control.Revision != l.state.controlRevision ||
-		binding.Control.RouteKey != l.state.routeKey) {
-		return ErrCodexControlChanged
-	}
 	if binding.Runtime != l.state.runtime || binding.RuntimeGeneration != l.state.runtimeGeneration {
 		return ErrCodexRuntimeUnavailable
 	}
 	return nil
 }
 
-func validateCodexRuntimeRequestForRegistry(req CodexRuntimeRequest, enforceControl bool) error {
-	if enforceControl {
-		return validateRemoteCodexRequest(req)
-	}
+func validateCodexRuntimeRequestRef(req CodexRuntimeRequest) error {
 	if strings.TrimSpace(req.Ref.ThreadID) == "" || strings.TrimSpace(req.Ref.ConversationID) == "" {
 		return fmt.Errorf("Codex runtime 请求缺少 thread 或 conversation")
 	}
@@ -567,11 +533,11 @@ func activateCodexBinding(current CodexThreadBinding, activation codexBindingAct
 }
 
 func validateCodexRuntimeRequest(req CodexRuntimeRequest) error {
-	if strings.TrimSpace(req.Ref.ThreadID) == "" || strings.TrimSpace(req.Ref.ConversationID) == "" {
-		return fmt.Errorf("Codex runtime 请求缺少 thread 或 conversation")
+	if err := validateCodexRuntimeRequestRef(req); err != nil {
+		return err
 	}
 	switch req.Intent.Owner {
-	case CodexControlUnclaimed, CodexControlDesktop:
+	case "", CodexControlUnclaimed, CodexControlDesktop:
 		return nil
 	case CodexControlRemote:
 		if strings.TrimSpace(req.Intent.RouteKey) == "" || strings.TrimSpace(req.Intent.ConversationID) == "" {
@@ -581,17 +547,6 @@ func validateCodexRuntimeRequest(req CodexRuntimeRequest) error {
 	default:
 		return fmt.Errorf("无效的 Codex 控制方 %q", req.Intent.Owner)
 	}
-}
-
-func validateRemoteCodexRequest(req CodexRuntimeRequest) error {
-	if err := validateCodexRuntimeRequest(req); err != nil {
-		return err
-	}
-	if req.Intent.Owner != CodexControlRemote ||
-		strings.TrimSpace(req.Intent.ConversationID) != strings.TrimSpace(req.Ref.ConversationID) {
-		return ErrCodexControlRequired
-	}
-	return nil
 }
 
 func sameCodexControlIntent(left CodexControlIntent, right CodexControlIntent) bool {

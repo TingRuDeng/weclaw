@@ -86,7 +86,7 @@ func assertFeishuOriginalRouteBound(t *testing.T, fixture feishuOriginalRouteFix
 		t.Fatal("inactive 目标不应创建观察任务")
 	}
 	requests := fixture.ag.handoffRequests()
-	if len(requests) < 1 || requests[0].Ref.ThreadID != "thread-target" || requests[0].Intent.RouteKey != fixture.routeBinding {
+	if len(requests) < 1 || requests[0].Ref.ThreadID != "thread-target" || requests[0].Ref.ConversationID != conversationID {
 		t.Fatalf("handoff=%#v", requests)
 	}
 }

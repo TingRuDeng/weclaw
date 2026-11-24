@@ -197,13 +197,8 @@ func (h *Handler) currentCodexSharedHostBinding(ctx context.Context, req externa
 		return agent.CodexThreadBinding{}, false, err
 	}
 	defer unlock()
-	route := codexConversationRoute{
-		bindingKey:     codexBindingKey(req.routeUserID, req.agentName),
-		conversationID: req.conversationID,
-	}
 	request := agent.CodexRuntimeRequest{
-		Ref:    agent.CodexThreadRef{ConversationID: req.conversationID, ThreadID: req.threadID},
-		Intent: codexSharedHostIntent(route),
+		Ref: agent.CodexThreadRef{ConversationID: req.conversationID, ThreadID: req.threadID},
 	}
 	binding, err := liveAgent.InspectCodexRuntime(controlCtx, request)
 	if err != nil || !codexRuntimeReadyForRemoteTurn(binding.Runtime) {

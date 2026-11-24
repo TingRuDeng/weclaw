@@ -16,7 +16,6 @@ type fakeCodexLiveAgent struct {
 	bindings                     map[string]agent.CodexThreadBinding
 	bindErr                      error
 	currentErr                   error
-	enforceControl               bool
 	inspectErrors                map[string]error
 	handoffErr                   error
 	handoffErrors                map[string]error
@@ -134,11 +133,6 @@ func (f *fakeCodexLiveAgent) ReconcileCodexObservedTurn(_ context.Context, req a
 	if binding.Runtime == agent.CodexRuntimeConflict {
 		return binding, agent.ErrCodexRuntimeConflict
 	}
-	intentEstablished := binding.Control.Owner != "" || binding.Control.RouteKey != "" ||
-		binding.Control.ConversationID != "" || binding.Control.Revision != 0
-	if f.enforceControl && intentEstablished && binding.Control != req.Intent {
-		return binding, agent.ErrCodexControlChanged
-	}
 	state.ThreadID = req.Ref.ThreadID
 	binding.Ref = req.Ref
 	binding.Control = req.Intent
@@ -200,7 +194,7 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 		binding.Runtime = agent.CodexRuntimeWeClaw
 		binding.ConflictReason = ""
 	}
-	if req.Intent.Owner == agent.CodexControlRemote && binding.Runtime == agent.CodexRuntimeUnknown {
+	if (req.Intent.Owner == "" || req.Intent.Owner == agent.CodexControlRemote) && binding.Runtime == agent.CodexRuntimeUnknown {
 		binding.Runtime = agent.CodexRuntimeWeClaw
 	}
 	if req.Intent.Owner == agent.CodexControlDesktop && binding.Runtime == agent.CodexRuntimeWeClaw {

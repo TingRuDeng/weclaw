@@ -482,16 +482,11 @@ func (h *Handler) reconcileExternalCodexTerminal(runtime externalCodexTaskRuntim
 		return err
 	}
 	defer unlock()
-	route := codexConversationRoute{
-		bindingKey:     codexBindingKey(runtime.opts.routeUserID, runtime.opts.agentName),
-		conversationID: runtime.opts.conversationID,
-	}
 	request := agent.CodexRuntimeRequest{
 		Ref: agent.CodexThreadRef{
 			ConversationID: runtime.opts.conversationID,
 			ThreadID:       runtime.opts.threadID,
 		},
-		Intent: codexSharedHostIntent(route),
 	}
 	_, err = liveAgent.ReconcileCodexObservedTurn(controlCtx, request, state)
 	return err

@@ -68,7 +68,6 @@ func TestCodexStatusShowsExactTurnAndControlChannel(t *testing.T) {
 		"turn: turn-1",
 		"Host: WeClaw 官方 daemon（共享）",
 		"控制通道: 共享 daemon；writer 未记录，具体客户端未暴露；WeClaw 可 steer/interrupt",
-		"控制意图（仅表示窗口 binding）: owner=remote route=wechat:route-1/codex",
 		"控制入口（本次命令）: platform=wechat；chat/reply_to 不可追踪；未确认控制授权，只能观察当前 turn",
 		"等待: 审批",
 		"当前窗口 binding: 已选择该 thread",
@@ -77,6 +76,9 @@ func TestCodexStatusShowsExactTurnAndControlChannel(t *testing.T) {
 		if !strings.Contains(result.Reply, want) {
 			t.Fatalf("reply=%q, want %q", result.Reply, want)
 		}
+	}
+	if strings.Contains(result.Reply, "控制意图（仅表示窗口 binding）") {
+		t.Fatalf("reply=%q, must not show fabricated control intent noise", result.Reply)
 	}
 }
 
@@ -166,7 +168,6 @@ func TestCodexStatusShowsDesktopControlChannel(t *testing.T) {
 	for _, want := range []string{
 		"Turn writer: Codex App Desktop Host（具体 client 未由 Desktop IPC 暴露）",
 		"控制通道: Codex App Desktop IPC；WeClaw 可 steer，/stop 需要在 Codex App 中执行",
-		"控制意图（仅表示窗口 binding）: owner=remote route=wechat:route-1/codex",
 		"控制入口（本次命令）: platform=wechat；chat/reply_to 不可追踪；未确认控制授权，只能观察当前 turn",
 	} {
 		if !strings.Contains(result.Reply, want) {

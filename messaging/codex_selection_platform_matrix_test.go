@@ -51,7 +51,7 @@ func TestCodexSelectionBindsForWeChatAndFeishu(t *testing.T) {
 				}
 				requests := ag.handoffRequests()
 				if len(requests) != 1 || requests[0].Ref.ThreadID != "thread-b" ||
-					requests[0].Ref.ConversationID != conversationID || requests[0].Intent.RouteKey != bindingKey {
+					requests[0].Ref.ConversationID != conversationID {
 					t.Fatalf("reply before shared host bind: %#v", requests)
 				}
 			}

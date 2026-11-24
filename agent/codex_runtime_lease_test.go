@@ -14,7 +14,7 @@ import (
 )
 
 func TestCodexRuntimeLeaseAcceptsExpectedDesktopTurn(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestCodexRuntimeLeaseAcceptsExpectedDesktopTurn(t *testing.T) {
 }
 
 func TestCodexRuntimeInspectReturnsSnapshotDuringWriterLease(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestCodexRuntimeInspectReturnsSnapshotDuringWriterLease(t *testing.T) {
 }
 
 func TestCodexRuntimeLeaseAllowsConcurrentDesktopTurn(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestCodexRuntimeLeaseAllowsConcurrentDesktopTurn(t *testing.T) {
 }
 
 func TestCodexRuntimeLeaseAllowsConcurrentCompletedDesktopTurn(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	initial := CodexThreadState{ThreadID: "thread-1", LastTurnID: "turn-old"}
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, initial); err != nil {
@@ -113,7 +113,7 @@ func TestCodexRuntimeLeaseAllowsConcurrentCompletedDesktopTurn(t *testing.T) {
 }
 
 func TestCodexRuntimeLeaseAcceptsFastCompletedRemoteTurn(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	initial := CodexThreadState{ThreadID: "thread-1", LastTurnID: "turn-old"}
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, initial); err != nil {
@@ -136,63 +136,8 @@ func TestCodexRuntimeLeaseAcceptsFastCompletedRemoteTurn(t *testing.T) {
 	lease.finish()
 }
 
-func TestCodexRuntimeLeaseRejectsChangedControlRevision(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(&codexDesktopOwnerProbeFake{})
-	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
-	if _, err := registry.activateRuntime(request, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
-		t.Fatal(err)
-	}
-	request.Intent.Revision = 2
-
-	_, err := registry.beginTurn(request)
-
-	if !errors.Is(err, ErrCodexControlChanged) {
-		t.Fatalf("error=%v，want control changed", err)
-	}
-}
-
-func TestCurrentCodexRuntimeRejectsControlChangeDuringWriterLease(t *testing.T) {
-	probe := &codexDesktopOwnerProbeFake{}
-	a := newACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
-	}, acpAgentOptions{desktopProbe: probe})
-	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
-	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
-		t.Fatal(err)
-	}
-	lease, err := a.codexOwners.beginTurn(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lease.finish()
-
-	next := remoteCodexRuntimeRequest("thread-1", "route-2", 2)
-	_, err = a.CurrentCodexRuntime(next)
-
-	if !errors.Is(err, ErrCodexControlChanged) {
-		t.Fatalf("error=%v，want control changed", err)
-	}
-	if probe.discoverCalls != 0 || probe.loadCalls != 0 {
-		t.Fatalf("读取绑定时不应探测 Desktop: discover=%d load=%d", probe.discoverCalls, probe.loadCalls)
-	}
-}
-
-func TestCodexRuntimeInspectAllowsOtherRouteButWriterLeaseRejectsIt(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(&codexDesktopOwnerProbeFake{})
-	request := remoteCodexRuntimeRequest("thread-1", "route-owner", 1)
-	request.Ref.ConversationID = "conversation-viewer"
-
-	binding, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"})
-	if err != nil || binding.Control.RouteKey != "route-owner" {
-		t.Fatalf("binding=%#v err=%v", binding, err)
-	}
-	if _, err := registry.beginTurn(request); !errors.Is(err, ErrCodexControlRequired) {
-		t.Fatalf("beginTurn error=%v，want control required", err)
-	}
-}
-
 func TestCodexRuntimeLeaseRejectsChangedGeneration(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(nil)
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
 		t.Fatal(err)
@@ -214,7 +159,7 @@ func TestCodexRuntimeLeaseRejectsChangedGeneration(t *testing.T) {
 }
 
 func TestCodexSharedHostSerializesDifferentFrontendRoutesPerThread(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(nil)
+	registry := newCodexRuntimeOwnerRegistry()
 	first := remoteCodexRuntimeRequest("thread-1", "feishu-window", 1)
 	second := remoteCodexRuntimeRequest("thread-1", "wechat-window", 9)
 	if _, err := registry.activateRuntime(first, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
@@ -243,7 +188,7 @@ func TestCodexSharedHostSerializesDifferentFrontendRoutesPerThread(t *testing.T)
 }
 
 func TestCodexSharedHostLeaseRequiresAuthoritativeRuntime(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(nil)
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "feishu-window", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeUnknown, CodexThreadState{ThreadID: "thread-1"}); err != nil {
 		t.Fatal(err)
@@ -254,7 +199,7 @@ func TestCodexSharedHostLeaseRequiresAuthoritativeRuntime(t *testing.T) {
 }
 
 func TestCodexRuntimeRemoteIntentAcceptsUnleasedDesktopTurn(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
 		t.Fatal(err)
@@ -271,7 +216,7 @@ func TestCodexRuntimeRemoteIntentAcceptsUnleasedDesktopTurn(t *testing.T) {
 }
 
 func TestCodexRuntimeRemoteIntentKeepsHandoffDesktopTurn(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	state := CodexThreadState{ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-existing"}
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, state); err != nil {
@@ -284,7 +229,7 @@ func TestCodexRuntimeRemoteIntentKeepsHandoffDesktopTurn(t *testing.T) {
 }
 
 func TestCodexRuntimeReconcilesObservedHandoffTurnBeforeTerminal(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
 		t.Fatal(err)
@@ -306,7 +251,7 @@ func TestCodexRuntimeReconcilesObservedHandoffTurnBeforeTerminal(t *testing.T) {
 }
 
 func TestCodexRuntimeReconcileAllowsSameTurnFromAnotherFrontendWhenControlNotEnforced(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(nil)
+	registry := newCodexRuntimeOwnerRegistry()
 	routeA := remoteCodexRuntimeRequest("thread-1", "route-a", 1)
 	routeB := remoteCodexRuntimeRequest("thread-1", "route-b", 1)
 	active := CodexThreadState{
@@ -330,27 +275,8 @@ func TestCodexRuntimeReconcileAllowsSameTurnFromAnotherFrontendWhenControlNotEnf
 	}
 }
 
-func TestCodexRuntimeReconcileStillRejectsChangedControlWhenEnforced(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
-	routeA := remoteCodexRuntimeRequest("thread-1", "route-a", 1)
-	routeB := remoteCodexRuntimeRequest("thread-1", "route-b", 1)
-	active := CodexThreadState{
-		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-shared",
-	}
-	if _, err := registry.activateRuntime(routeA, CodexRuntimeDesktop, active); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := registry.activateRuntime(routeB, CodexRuntimeDesktop, active); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := registry.reconcileObservedTurn(routeA, active); !errors.Is(err, ErrCodexControlChanged) {
-		t.Fatalf("reconcile error=%v, want ErrCodexControlChanged", err)
-	}
-}
-
 func TestCodexRuntimeReconcileDoesNotClearExplicitConflict(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	state := CodexThreadState{ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-existing"}
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, state); err != nil {
@@ -374,7 +300,7 @@ func TestCodexRuntimeReconcileDoesNotClearExplicitConflict(t *testing.T) {
 }
 
 func TestCodexRuntimeReconcileTerminalAfterDesktopDisconnect(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	state := CodexThreadState{ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-existing"}
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, state); err != nil {
@@ -392,7 +318,7 @@ func TestCodexRuntimeReconcileTerminalAfterDesktopDisconnect(t *testing.T) {
 }
 
 func TestCodexRuntimeRemoteIntentAcceptsCompletedDesktopTurn(t *testing.T) {
-	registry := newLegacyCodexRuntimeOwnerRegistry()
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	initial := CodexThreadState{ThreadID: "thread-1", LastTurnID: "turn-old"}
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, initial); err != nil {
@@ -434,7 +360,7 @@ func TestCodexRuntimeConflictRequiresExplicitHandoffToRecover(t *testing.T) {
 }
 
 func TestCodexRuntimeConflictClearsOnConfirmedDesktopSnapshot(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(&codexDesktopOwnerProbeFake{})
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{
 		ThreadID: "thread-1", LastTurnID: "turn-old",
@@ -1283,7 +1209,7 @@ func TestInspectCodexRuntimeReconcilesUncertainWriterLease(t *testing.T) {
 }
 
 func TestUncertainLeaseReleasesWhenAuthoritativeIdleAdvancedPastAcceptedTurn(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(nil)
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	initial := CodexThreadState{ThreadID: "thread-1", LastTurnID: "turn-before", LastTurnStatus: "completed"}
 	if _, err := registry.activateRuntime(request, CodexRuntimeWeClaw, initial); err != nil {
@@ -1314,7 +1240,7 @@ func TestUncertainLeaseReleasesWhenAuthoritativeIdleAdvancedPastAcceptedTurn(t *
 }
 
 func TestUncertainLeaseWithoutTurnIDDoesNotReleaseForUnmatchedTerminal(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(nil)
+	registry := newCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	initial := CodexThreadState{ThreadID: "thread-1", LastTurnID: "turn-before", LastTurnStatus: "completed"}
 	if _, err := registry.activateRuntime(request, CodexRuntimeWeClaw, initial); err != nil {
@@ -1393,11 +1319,16 @@ func TestCodexRuntimeRequestValidationRejectsInvalidInput(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateRemoteCodexRequest(test.req)
+			err := validateCodexRuntimeRequest(test.req)
 			if err == nil || test.want != nil && !errors.Is(err, test.want) {
 				t.Fatalf("error=%v，want=%v", err, test.want)
 			}
 		})
+	}
+	if err := validateCodexRuntimeRequest(CodexRuntimeRequest{
+		Ref: CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-1"},
+	}); err != nil {
+		t.Fatalf("shared frontend request without fabricated intent should be valid: %v", err)
 	}
 }
 
@@ -1442,10 +1373,6 @@ func TestHandoffCodexRuntimeDesktopClearsExplicitConflict(t *testing.T) {
 	if err != nil || binding.Runtime != CodexRuntimeDesktop || binding.ConflictReason != "" {
 		t.Fatalf("binding=%#v error=%v", binding, err)
 	}
-}
-
-func newLegacyCodexRuntimeOwnerRegistry() *codexRuntimeOwnerRegistry {
-	return newCodexRuntimeOwnerRegistry(&codexDesktopOwnerProbeFake{})
 }
 
 func remoteCodexRuntimeRequest(threadID string, routeKey string, revision uint64) CodexRuntimeRequest {

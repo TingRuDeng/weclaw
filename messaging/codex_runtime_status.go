@@ -93,7 +93,6 @@ func codexRuntimeStatusDetails(h *Handler, runtime codexSessionCommandRuntime, t
 		"当前窗口 binding: 已选择该 thread",
 		codexStatusTurnWriterLine(resolution.Binding.Runtime, taskInfo, state.Active),
 		"控制通道: " + control,
-		codexStatusControlIntentLine(resolution.Request.Intent),
 		codexStatusControlEntryLine(h, runtime, threadID, resolution.Binding.Runtime, state.Active),
 		"等待: " + wait,
 	}
@@ -159,22 +158,6 @@ func codexStatusTaskWriterIdentity(taskInfo codexStatusTaskInfo) string {
 		return "未记录（platform/account/chat/reply_to 不可追踪）"
 	}
 	return fmt.Sprintf("platform=%s account=%s；chat/reply_to 不可追踪", platformName, accountID)
-}
-
-// codexStatusControlIntentLine 展示当前窗口提交给 runtime registry 的控制意图。
-// RouteKey 只代表 binding 选择，不能被误读为 app-server 当前 writer client。
-func codexStatusControlIntentLine(intent agent.CodexControlIntent) string {
-	owner := strings.TrimSpace(string(intent.Owner))
-	if owner == "" {
-		owner = "(none)"
-	}
-	routeKey := strings.ReplaceAll(strings.TrimSpace(intent.RouteKey), "\x00", "/")
-	if routeKey == "" {
-		routeKey = "(none)"
-	}
-	return fmt.Sprintf("控制意图（仅表示窗口 binding）: owner=%s route=%s revision=%d；不等于 active turn writer",
-		codexStatusRouteField(owner), codexStatusRouteField(routeKey),
-		intent.Revision)
 }
 
 // codexStatusControlEntryLine 把当前命令真正可以发送控制请求的入口单独列出。

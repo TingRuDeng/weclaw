@@ -168,7 +168,7 @@ func TestAcquireCodexSessionCommitsFrontendBindingAndSharedRuntime(t *testing.T)
 	}
 	requests := f.ag.handoffRequests()
 	if len(requests) != 1 || requests[0].Ref.ThreadID != "thread-b" ||
-		requests[0].Intent.RouteKey != f.bindingKey {
+		requests[0].WorkspaceRoot != f.workspaceB {
 		t.Fatalf("bind requests=%#v", requests)
 	}
 	if result.resolution.Binding.Runtime != agent.CodexRuntimeWeClaw {

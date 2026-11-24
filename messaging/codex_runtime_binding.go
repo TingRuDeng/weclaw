@@ -66,16 +66,14 @@ func (h *Handler) resolveCodexRuntimeLocked(ctx context.Context, opts codexRunti
 	return resolution, nil
 }
 
-// buildCodexRuntimeRequest 组合 thread、控制 revision 与 rollout 检查点。
+// buildCodexRuntimeRequest 组合 thread、窗口路由与 rollout 检查点。
 func (h *Handler) buildCodexRuntimeRequest(route codexConversationRoute, threadID string) (agent.CodexRuntimeRequest, codexRolloutTaskState, error) {
-	intent := codexSharedHostIntent(route)
 	rollout, _, err := h.readLocalCodexRolloutTaskState(threadID)
 	if err != nil {
 		return agent.CodexRuntimeRequest{}, codexRolloutTaskState{}, err
 	}
 	request := agent.CodexRuntimeRequest{
 		Ref:           agent.CodexThreadRef{ConversationID: route.conversationID, ThreadID: threadID},
-		Intent:        intent,
 		Checkpoint:    agentRolloutCheckpoint(rollout),
 		WorkspaceRoot: route.workspaceRoot,
 		PendingFirstTurn: h.ensureCodexSessions().isPendingFirstTurn(
@@ -85,7 +83,7 @@ func (h *Handler) buildCodexRuntimeRequest(route codexConversationRoute, threadI
 	return request, rollout, nil
 }
 
-// buildCodexRuntimeRequestForTurn 让 rollout 读取失败降级为无 checkpoint 恢复，不能否决 remote owner 的写入。
+// buildCodexRuntimeRequestForTurn 让 rollout 读取失败降级为无 checkpoint 恢复，不能阻断首轮写入。
 func (h *Handler) buildCodexRuntimeRequestForTurn(route codexConversationRoute, threadID string) agent.CodexRuntimeRequest {
 	request, _, err := h.buildCodexRuntimeRequest(route, threadID)
 	if err == nil {
@@ -94,18 +92,10 @@ func (h *Handler) buildCodexRuntimeRequestForTurn(route codexConversationRoute, 
 	log.Printf("[codex-task] 首次写入忽略 rollout checkpoint 读取失败 thread=%q: %v", threadID, err)
 	return agent.CodexRuntimeRequest{
 		Ref:           route.ref(threadID),
-		Intent:        codexSharedHostIntent(route),
 		WorkspaceRoot: route.workspaceRoot,
 		PendingFirstTurn: h.ensureCodexSessions().isPendingFirstTurn(
 			route.bindingKey, route.workspaceRoot, threadID,
 		),
-	}
-}
-
-func codexSharedHostIntent(route codexConversationRoute) agent.CodexControlIntent {
-	return agent.CodexControlIntent{
-		Owner: agent.CodexControlRemote, RouteKey: route.bindingKey,
-		ConversationID: route.conversationID, Revision: 1,
 	}
 }
 
@@ -117,7 +107,7 @@ func agentRolloutCheckpoint(state codexRolloutTaskState) agent.CodexRolloutCheck
 
 func unknownCodexRuntimeBinding(request agent.CodexRuntimeRequest) agent.CodexThreadBinding {
 	return agent.CodexThreadBinding{
-		Ref: request.Ref, Control: request.Intent, Runtime: agent.CodexRuntimeUnknown,
+		Ref: request.Ref, Runtime: agent.CodexRuntimeUnknown,
 		State: agent.CodexThreadState{ThreadID: request.Ref.ThreadID},
 	}
 }

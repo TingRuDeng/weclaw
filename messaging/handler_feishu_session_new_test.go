@@ -40,7 +40,7 @@ func TestFeishuNewUsesGroupSessionMetadataForReset(t *testing.T) {
 		t.Fatalf("route thread=%q pending=%v, want thread-new false", routeThread, pending)
 	}
 	requests := ag.handoffRequests()
-	if len(requests) != 1 || requests[0].Intent.RouteKey != bindingKey {
+	if len(requests) != 1 || requests[0].Ref.ConversationID != buildCodexConversationID(sessionKey, "codex", workspace) {
 		t.Fatalf("shared host bind requests=%#v", requests)
 	}
 }

@@ -17,15 +17,10 @@ type externalCodexControlRequest struct {
 }
 
 type externalCodexControlTarget struct {
-	task           *activeAgentTask
-	threadID       string
-	turnID         string
-	reserved       bool
-	routeUserID    string
-	agentName      string
-	conversationID string
-	workspaceRoot  string
-	owner          string
+	task     *activeAgentTask
+	threadID string
+	turnID   string
+	reserved bool
 }
 
 // externalCodexControlState 返回外部任务是否存在、是否可控制以及当前用户是否无权操作。
@@ -105,13 +100,8 @@ func (h *Handler) resolveExternalCodexControlLocked(
 	if !live || !runtime {
 		return target, nil
 	}
-	route := codexConversationRoute{
-		bindingKey: target.bindingKey(), conversationID: firstNonBlank(target.conversationID, req.key),
-		workspaceRoot: target.workspaceRoot, threadID: target.threadID,
-	}
 	binding, err := liveAgent.InspectCodexRuntime(ctx, agent.CodexRuntimeRequest{
-		Ref:    agent.CodexThreadRef{ConversationID: req.key, ThreadID: target.threadID},
-		Intent: codexSharedHostIntent(route),
+		Ref: agent.CodexThreadRef{ConversationID: req.key, ThreadID: target.threadID},
 	})
 	if err != nil {
 		return target, fmt.Errorf("无法确认 Codex 实时运行位置: %w", err)
@@ -140,11 +130,7 @@ func (h *Handler) cachedExternalCodexTarget(key string, actor string) (externalC
 	task := h.tasks.active[key]
 	if task == nil {
 		if persisted, ok := h.ensureCodexSessions().controlTargetForConversation(key, actor); ok {
-			return externalCodexControlTarget{
-				threadID: persisted.ThreadID, routeUserID: persisted.RouteUserID,
-				agentName: persisted.AgentName, conversationID: persisted.ConversationID,
-				workspaceRoot: persisted.WorkspaceRoot, owner: persisted.OwnerUserID,
-			}, false
+			return externalCodexControlTarget{threadID: persisted.ThreadID}, false
 		}
 		return externalCodexControlTarget{}, false
 	}
@@ -158,14 +144,6 @@ func (h *Handler) cachedExternalCodexTarget(key string, actor string) (externalC
 	}
 	return externalCodexControlTarget{
 		task: task, threadID: task.codexThreadID, turnID: task.codexTurnID,
-		reserved: task.phase == codexTaskReserved, routeUserID: task.routeUserID,
-		agentName: task.agentName, conversationID: firstNonBlank(task.conversationID, key),
+		reserved: task.phase == codexTaskReserved,
 	}, false
-}
-
-func (target externalCodexControlTarget) bindingKey() string {
-	if target.task != nil {
-		return codexBindingKey(target.task.routeUserID, target.task.agentName)
-	}
-	return codexBindingKey(target.routeUserID, target.agentName)
 }

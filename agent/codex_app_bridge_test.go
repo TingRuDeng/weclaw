@@ -569,7 +569,7 @@ func TestCodexAppBridgeRelaysAppJSONLWithoutChangingMessages(t *testing.T) {
 
 func TestCodexAppSharedHostDoesNotUsePrivateDesktopOwnership(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"), CodexHostMode: "shared", CodexDesktopBridge: true})
-	if a.desktopProbe != nil || a.codexDesktopHostSelection || a.codexOwners.enforcesControl() {
+	if a.desktopProbe != nil || a.codexDesktopHostSelection {
 		t.Fatal("shared App routing still depends on private Desktop ownership")
 	}
 	if !a.officialDaemonIsAuthoritativeForUnknownBinding() {

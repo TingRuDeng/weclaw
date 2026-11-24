@@ -112,7 +112,7 @@ func TestCodexDesktopRuntimeDoesNotPublishBeforeDesktopBecomesAuthoritative(t *t
 	})
 	runtime.client = &codexDesktopClient{epoch: 1, conn: clientConn}
 	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
-	owners := newCodexRuntimeOwnerRegistry(nil)
+	owners := newCodexRuntimeOwnerRegistry()
 	runtime.setOwnerRegistry(owners)
 	mode := CodexRuntimeUnknown
 	runtime.setAuthoritative(func(string) bool { return mode == CodexRuntimeDesktop })

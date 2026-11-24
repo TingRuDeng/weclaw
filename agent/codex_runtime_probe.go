@@ -86,12 +86,6 @@ func (a *ACPAgent) CurrentCodexRuntime(req CodexRuntimeRequest) (CodexThreadBind
 		binding.Control = req.Intent
 		return binding, nil
 	}
-	if a.codexOwners.enforcesControl() && !sameCodexControlIntent(binding.Control, req.Intent) {
-		if a.codexOwners.hasWriterLease(req.Ref.ThreadID) {
-			return binding, ErrCodexControlChanged
-		}
-		return unknownCodexRuntimeSnapshot(req, binding.State), nil
-	}
 	binding.Ref = req.Ref
 	return binding, nil
 }
@@ -176,13 +170,6 @@ func (a *ACPAgent) handoffCodexRuntimeWithIntentLocked(
 			ctx, req, intent, codexRuntimeHandoffActivationTimeout,
 		)
 	}
-	// A writer lease protects the accepted turn lifecycle, not a frontend route.
-	// The production shared-host topology may bind another conversation to the
-	// same runtime while that turn is active. Compatibility probes that still
-	// enforce the retired owner model keep the old fail-closed behavior.
-	if a.codexOwners.hasWriterLease(req.Ref.ThreadID) && a.codexOwners.enforcesControl() {
-		return CodexThreadBinding{}, ErrCodexWriterBusy
-	}
 	if req.Intent.Owner == CodexControlUnclaimed {
 		return a.commitCodexRuntimeBindingIntent(
 			intent,
@@ -196,7 +183,7 @@ func (a *ACPAgent) handoffCodexRuntimeWithIntentLocked(
 	}
 	// thread/start/session resume 已经给出了当前 app-server 的本地 writer 证据。
 	// 窗口认领只需同步控制 revision，不应为此再次探测 Codex Desktop。
-	if req.Intent.Owner == CodexControlRemote && !a.codexDesktopCoordination {
+	if isRemoteCodexControlOwner(req.Intent.Owner) && !a.codexDesktopCoordination {
 		if current, ok := a.codexOwners.threadBinding(req.Ref.ThreadID); ok && current.Runtime == CodexRuntimeWeClaw {
 			binding, err := a.commitCodexThreadBindingIntent(
 				intent, false, false,
@@ -216,7 +203,7 @@ func (a *ACPAgent) handoffCodexRuntimeWithIntentLocked(
 	// official daemon 是唯一 Host 时，Codex App 只是 frontend。App 的
 	// Desktop IPC 可能不存在或已不可达，不能阻止飞书 follower 直接复用
 	// 同一 daemon；否则每次恢复都会把 frontend 故障误报成 Host ownership unknown。
-	if req.Intent.Owner == CodexControlRemote &&
+	if isRemoteCodexControlOwner(req.Intent.Owner) &&
 		a.usesOfficialCodexDaemon() &&
 		a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw &&
 		!a.codexDesktopHostSelection {
@@ -230,7 +217,7 @@ func (a *ACPAgent) handoffCodexRuntimeWithIntentLocked(
 		allowNoClientRelease:  true,
 	})
 	cancelProbe()
-	if req.Intent.Owner == CodexControlRemote && canRecoverCodexRuntimeForRemoteOwner(err) &&
+	if isRemoteCodexControlOwner(req.Intent.Owner) && canRecoverCodexRuntimeForRemoteOwner(err) &&
 		(!a.codexDesktopCoordination || desktopHostDefinitelyAbsent(a.desktopProbe)) {
 		log.Printf("[codex-runtime] remote owner 忽略 Desktop 探测不确定状态 thread=%q: %v", req.Ref.ThreadID, err)
 		runtime, err = CodexRuntimeUnknown, nil
@@ -242,7 +229,7 @@ func (a *ACPAgent) handoffCodexRuntimeWithIntentLocked(
 	// Desktop probe confirms release, attaching a new frontend only needs to read
 	// and bind the target thread on the existing client. Restarting that client
 	// would unnecessarily drain unrelated active turns.
-	if req.Intent.Owner == CodexControlRemote && runtime == CodexRuntimeUnknown &&
+	if isRemoteCodexControlOwner(req.Intent.Owner) && runtime == CodexRuntimeUnknown &&
 		a.usesOfficialCodexDaemon() && a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw {
 		return a.activateSharedCodexHostWithIntent(
 			ctx, req, intent, codexRuntimeHandoffActivationTimeout,
@@ -408,6 +395,10 @@ func codexRuntimeActivationPhaseContext(parent context.Context, timeout time.Dur
 		return context.WithCancel(parent)
 	}
 	return context.WithTimeout(parent, timeout)
+}
+
+func isRemoteCodexControlOwner(owner CodexControlOwner) bool {
+	return owner == "" || owner == CodexControlRemote
 }
 
 func (a *ACPAgent) validateCodexRuntimeSupport(req CodexRuntimeRequest) error {

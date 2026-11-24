@@ -22,7 +22,7 @@ func TestNativeCodexSelectionDoesNotDependOnAppOrStandalonePresence(t *testing.T
 			if a.codexHostMode != "native" || !a.usesOfficialCodexDaemon() {
 				t.Fatalf("mode=%s official=%v, want native official client", a.codexHostMode, a.usesOfficialCodexDaemon())
 			}
-			if a.codexDesktopCoordination || a.codexDesktopHostSelection || a.desktopProbe != nil || a.codexOwners.enforcesControl() {
+			if a.codexDesktopCoordination || a.codexDesktopHostSelection || a.desktopProbe != nil {
 				t.Fatal("native client must not install Desktop routing or frontend control")
 			}
 		})

@@ -151,17 +151,9 @@ func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
 	if probe == nil && a.codexDesktopCoordination {
 		probe = newSystemCodexDesktopRuntime()
 	}
-	a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
-	if a.codexHostMode == codexHostModeShared || a.codexHostMode == codexHostModeNative {
-		a.codexOwners.enforceControl = false
-	}
+	a.codexOwners = newCodexRuntimeOwnerRegistry()
 	if probe == nil {
 		return
-	}
-	// 生产 bridge 仍沿用“多 frontend binding + 单 thread lease”，不恢复
-	// 已退役的 route 独占 owner；测试注入默认保留旧控制语义。
-	if a.codexDesktopCoordination {
-		a.codexOwners.enforceControl = false
 	}
 	a.desktopProbe = probe
 	if runtime, ok := probe.(*codexDesktopRuntime); ok {

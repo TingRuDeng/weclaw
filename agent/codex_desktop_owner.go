@@ -13,21 +13,16 @@ type codexRuntimeOwnerRegistry struct {
 	conversationRevisionCounter uint64
 	leases                      map[string]*codexWriterLeaseState
 	archivedThreads             map[string]bool
-	// enforceControl only exists for the retired Desktop bridge compatibility
-	// path. The shared app-server has one writer authority and does not assign
-	// exclusive ownership to individual frontend routes.
-	enforceControl bool
 }
 
 // newCodexRuntimeOwnerRegistry 创建独立于 ACP threads map 的 owner registry。
-func newCodexRuntimeOwnerRegistry(probe codexDesktopOwnerProbe) *codexRuntimeOwnerRegistry {
+func newCodexRuntimeOwnerRegistry() *codexRuntimeOwnerRegistry {
 	return &codexRuntimeOwnerRegistry{
 		threads:               make(map[string]CodexThreadBinding),
 		conversations:         make(map[string]string),
 		conversationRevisions: make(map[string]uint64),
 		leases:                make(map[string]*codexWriterLeaseState),
 		archivedThreads:       make(map[string]bool),
-		enforceControl:        probe != nil,
 	}
 }
 
@@ -154,12 +149,6 @@ func (r *codexRuntimeOwnerRegistry) invalidateRuntimeAuthority(runtime CodexRunt
 		binding.RuntimeGeneration++
 		r.threads[threadID] = binding
 	}
-}
-
-func (r *codexRuntimeOwnerRegistry) enforcesControl() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.enforceControl
 }
 
 // threadBinding 返回指定 thread 的当前权威 owner 快照。

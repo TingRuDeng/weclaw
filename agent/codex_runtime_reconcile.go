@@ -8,7 +8,7 @@ import (
 // reconcileObservedTurn 把已由远程窗口观察的同一 Desktop turn 同步到 owner registry。
 // 它只收敛同一控制 revision 下的已知 turn，不会解除冲突态或覆盖正在写入的 lease。
 func (r *codexRuntimeOwnerRegistry) reconcileObservedTurn(req CodexRuntimeRequest, state CodexThreadState) (CodexThreadBinding, error) {
-	if err := validateRemoteCodexRequest(req); err != nil {
+	if err := validateCodexRuntimeRequestRef(req); err != nil {
 		return CodexThreadBinding{}, err
 	}
 	threadID := strings.TrimSpace(req.Ref.ThreadID)
@@ -25,7 +25,7 @@ func (r *codexRuntimeOwnerRegistry) reconcileObservedTurn(req CodexRuntimeReques
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	binding, ok := r.threads[threadID]
-	if !ok || r.enforceControl && !sameCodexControlIntent(binding.Control, req.Intent) {
+	if !ok {
 		return binding, ErrCodexControlChanged
 	}
 	if r.leases[threadID] != nil {
@@ -69,7 +69,7 @@ func (r *codexRuntimeOwnerRegistry) reconcileObservedTurn(req CodexRuntimeReques
 // 改写 runtime generation，或把不同 turn 当成同一任务。这个路径只在
 // ReconcileCodexObservedTurn 已确认官方 daemon 为 Host 时调用。
 func (r *codexRuntimeOwnerRegistry) reconcileSharedHostObservedTurn(req CodexRuntimeRequest, state CodexThreadState) (CodexThreadBinding, error) {
-	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
+	if err := validateCodexRuntimeRequestRef(req); err != nil {
 		return CodexThreadBinding{}, err
 	}
 	threadID := strings.TrimSpace(req.Ref.ThreadID)
@@ -86,9 +86,6 @@ func (r *codexRuntimeOwnerRegistry) reconcileSharedHostObservedTurn(req CodexRun
 	defer r.mu.Unlock()
 	binding, ok := r.threads[threadID]
 	if !ok {
-		return binding, ErrCodexControlChanged
-	}
-	if r.enforceControl && !sameCodexControlIntent(binding.Control, req.Intent) {
 		return binding, ErrCodexControlChanged
 	}
 	if binding.Runtime == CodexRuntimeConflict {

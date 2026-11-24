@@ -50,7 +50,7 @@ func (f *codexDesktopOwnerProbeFake) Presence() (bool, bool) {
 }
 
 func TestCodexDesktopSnapshotClaimsUnownedThread(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(&codexDesktopOwnerProbeFake{})
+	registry := newCodexRuntimeOwnerRegistry()
 	state := CodexThreadState{ThreadID: "thread-1", Model: "gpt-test"}
 	binding := registry.observeDesktopSnapshot("thread-1", 7, state)
 	if binding.Runtime != CodexRuntimeDesktop || binding.RuntimeGeneration != 1 || binding.State.Model != "gpt-test" {
@@ -59,7 +59,7 @@ func TestCodexDesktopSnapshotClaimsUnownedThread(t *testing.T) {
 }
 
 func TestCodexDesktopSnapshotReconcilesIdleWeClawRuntime(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(&codexDesktopOwnerProbeFake{})
+	registry := newCodexRuntimeOwnerRegistry()
 	registry.claimWeClawThread("thread-1", CodexThreadState{ThreadID: "thread-1"})
 	binding := registry.observeDesktopSnapshot("thread-1", 2, CodexThreadState{ThreadID: "thread-1"})
 	if binding.Runtime != CodexRuntimeDesktop {
@@ -68,7 +68,7 @@ func TestCodexDesktopSnapshotReconcilesIdleWeClawRuntime(t *testing.T) {
 }
 
 func TestCodexRuntimeOwnerDisconnectDoesNotReleaseThread(t *testing.T) {
-	registry := newCodexRuntimeOwnerRegistry(&codexDesktopOwnerProbeFake{})
+	registry := newCodexRuntimeOwnerRegistry()
 	registry.observeDesktopSnapshot("thread-1", 1, CodexThreadState{ThreadID: "thread-1"})
 	registry.markDesktopDisconnected()
 	binding, ok := registry.threadBinding("thread-1")
@@ -117,7 +117,7 @@ func TestCodexRuntimeOwnerRestoredBindingMustProbeAgain(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{
 		loadErr: ErrCodexDesktopNoClient, socketExists: true, processExists: true,
 	}
-	registry := newCodexRuntimeOwnerRegistry(probe)
+	registry := newCodexRuntimeOwnerRegistry()
 	registry.restoreBindings(map[string]CodexThreadBinding{
 		"conversation-1": {
 			Ref: CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-1"},
@@ -625,30 +625,6 @@ func TestDesktopBridgeStopsIdleSharedHostBeforeActivation(t *testing.T) {
 
 	if err != nil || !stopped || binding.Runtime != CodexRuntimeDesktop {
 		t.Fatalf("binding=%#v error=%v stopped=%v", binding, err, stopped)
-	}
-}
-
-func TestHandoffCodexRuntimeRejectsActiveWriter(t *testing.T) {
-	a := newACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
-	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
-	remote := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
-	if _, err := a.codexOwners.activateRuntime(remote, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
-		t.Fatal(err)
-	}
-	lease, err := a.codexOwners.beginTurn(remote)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lease.finish()
-	desktop := CodexRuntimeRequest{
-		Ref: remote.Ref, Intent: CodexControlIntent{Owner: CodexControlDesktop, Revision: 2},
-	}
-
-	_, err = a.HandoffCodexRuntime(context.Background(), desktop)
-
-	if !errors.Is(err, ErrCodexWriterBusy) {
-		t.Fatalf("error=%v，want writer busy", err)
 	}
 }
 
