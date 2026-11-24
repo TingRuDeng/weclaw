@@ -220,7 +220,7 @@ func NormalizeCodexRemoteFirst(cfg *Config) bool {
 
 func isNativeCodexCommand(command string) bool {
 	base := strings.ToLower(filepath.Base(strings.TrimSpace(command)))
-	return base == "codex" || base == "codex.exe"
+	return base == "codex"
 }
 
 func isNativeCodexAppServerConfig(cfg AgentConfig) bool {

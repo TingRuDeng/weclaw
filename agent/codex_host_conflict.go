@@ -554,9 +554,9 @@ func codexHostExactCommandArgs(executable string, argv []string) ([]string, bool
 		launcher = strings.ToLower(filepath.Base(strings.Trim(argv[0], "\"'")))
 	}
 	switch launcher {
-	case "codex", "codex.exe":
+	case "codex":
 		return argv[1:], true
-	case "node", "node.exe":
+	case "node":
 		if len(argv) < 2 {
 			return nil, false
 		}
@@ -584,9 +584,9 @@ func codexHostCommandArgs(executable, command string) ([]string, bool) {
 	}
 	var names []string
 	switch launcher {
-	case "codex", "codex.exe":
-		names = []string{"codex.exe", "codex"}
-	case "node", "node.exe":
+	case "codex":
+		names = []string{"codex"}
+	case "node":
 		names = []string{"codex.js", "codex"}
 	default:
 		if explicitLauncher {
@@ -594,7 +594,7 @@ func codexHostCommandArgs(executable, command string) ([]string, bool) {
 		}
 		// The executable path in `ps command=` is not quoted. An absolute path
 		// containing spaces therefore needs a conservative basename fallback.
-		names = []string{"codex.exe", "codex"}
+		names = []string{"codex"}
 	}
 	tail, ok := commandTailAfterExecutable(command, names)
 	if !ok {

@@ -53,9 +53,9 @@ func systemCodexHostProcessSnapshot(ctx context.Context, allowedUIDs map[uint32]
 func codexHostProcessNeedsExactArgs(process codexHostProcessSnapshot) bool {
 	launcher := strings.ToLower(filepath.Base(strings.TrimSpace(process.Executable)))
 	switch launcher {
-	case "codex", "codex.exe":
+	case "codex":
 		return true
-	case "node", "node.exe":
+	case "node":
 		_, ok := commandTailAfterExecutable(process.Command, []string{"codex.js", "codex"})
 		return ok
 	default:

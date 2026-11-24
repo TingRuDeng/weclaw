@@ -154,7 +154,7 @@ func configuredNativeCodexCommand(cfg *config.Config) (string, bool) {
 	}
 	command := strings.TrimSpace(agentCfg.Command)
 	base := strings.ToLower(filepath.Base(command))
-	if base == "codex" || base == "codex.exe" {
+	if base == "codex" {
 		return command, true
 	}
 	return "codex", false

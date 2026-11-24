@@ -213,7 +213,7 @@ func (a *ACPAgent) failACPStartup(pid int, startErr error) error {
 		}
 	}
 	base := strings.ToLower(filepath.Base(a.command))
-	if base == "claude" || base == "claude.exe" {
+	if base == "claude" {
 		return fmt.Errorf("agent startup failed (pid=%d): %w; claude CLI does not support ACP directly, set type to \"cli\" or install claude-agent-acp", pid, startErr)
 	}
 	return fmt.Errorf("agent startup failed (pid=%d): %w", pid, startErr)

@@ -44,7 +44,7 @@ func (a *ACPAgent) usesCodexSharedHost() bool {
 		return false
 	}
 	base := strings.ToLower(filepath.Base(strings.TrimSpace(a.command)))
-	return base == "codex" || base == "codex.exe"
+	return base == "codex"
 }
 
 func (a *ACPAgent) launchCodexHostClient(ctx context.Context) (int, error) {

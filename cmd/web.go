@@ -91,8 +91,6 @@ func openBrowser(url string) {
 	switch runtime.GOOS {
 	case "darwin":
 		name, args = "open", []string{url}
-	case "windows":
-		name, args = "rundll32", []string{"url.dll,FileProtocolHandler", url}
 	default:
 		name, args = "xdg-open", []string{url}
 	}

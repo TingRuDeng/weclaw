@@ -135,12 +135,8 @@ func replaceBinary(src, dst string) error {
 		return nil
 	}
 
-	if runtime.GOOS != "windows" {
-		fmt.Printf("Installing to %s (requires sudo)...\n", dst)
-		return sudoStageAndReplaceBinary(src, dst)
-	}
-
-	return fmt.Errorf("cannot write to %s", dst)
+	fmt.Printf("Installing to %s (requires sudo)...\n", dst)
+	return sudoStageAndReplaceBinary(src, dst)
 }
 
 func installBinaryWithRollback(src string, dst string) (updateTransaction, error) {

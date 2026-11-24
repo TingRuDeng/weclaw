@@ -9,7 +9,7 @@ func detectACPProtocol(command string, args []string) string {
 	base := strings.ToLower(filepath.Base(command))
 	// codex-acp is a standard ACP wrapper, NOT codex app-server
 	// Only `codex app-server` uses the codex-native protocol
-	if base == "codex" || base == "codex.exe" {
+	if base == "codex" {
 		for _, arg := range args {
 			if arg == "app-server" {
 				return protocolCodexAppServer
