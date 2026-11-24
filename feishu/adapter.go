@@ -152,11 +152,9 @@ func (a *Adapter) NewReplier(chatID string) platform.Replier {
 	return newReplierWithTaskCards(a.sender, chatID, a.cardKit, a.taskCards).withDeliveryAccount(a.creds.AppID)
 }
 
-// NewReplierForRoute 恢复原消息 / 话题回复关系。
+// NewReplierForRoute 为恢复投递创建飞书会话回复器。
 func (a *Adapter) NewReplierForRoute(route platform.DeliveryRoute) platform.Replier {
-	reply := newReplierWithTaskCards(a.sender, route.ChatID, a.cardKit, a.taskCards).withDeliveryAccount(a.creds.AppID)
-	reply.replyToID = strings.TrimSpace(route.ReplyToID)
-	return reply
+	return a.NewReplier(route.ChatID)
 }
 
 // Run 校验凭证并启动飞书长连接，收到事件后交给 dispatcher 处理。

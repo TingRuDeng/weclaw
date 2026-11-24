@@ -57,7 +57,7 @@ func TestApprovalRebuildPreservesFullTaskProgress(t *testing.T) {
 	kit := &fakeCardKitClient{}
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.cardKit = kit
-	adapter.taskCards.record("card-task-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Summary: "正在运行测试", Preview: "读取代码\n\n运行测试", Content: "读取代码\n\n运行测试", Collapsible: true})
+	adapter.taskCards.record("card-task-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Summary: "正在运行测试", Content: "读取代码\n\n运行测试"})
 	dispatched := make(chan platform.IncomingMessage, 1)
 	if _, err := adapter.handleCardActionEvent(context.Background(), approvalCardActionEvent("allow", "允许本次", "card-task-1"), func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
@@ -76,7 +76,7 @@ func TestApprovalRebuildPreservesFullTaskProgress(t *testing.T) {
 		if item["element_id"] == cardMainContentID {
 			progressFound = item["content"] == "读取代码\n\n运行测试"
 		}
-		if item["element_id"] == cardProgressCollapseID || item["element_id"] == cardProgressExpandID {
+		if item["tag"] == "button" {
 			controlFound = true
 		}
 		value := item["content"]

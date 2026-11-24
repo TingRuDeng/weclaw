@@ -19,24 +19,17 @@ type messageSender interface {
 	SendFile(ctx context.Context, openID string, localPath string) error
 	SendCard(ctx context.Context, openID string, cardID string) error
 	PatchCard(ctx context.Context, messageID string, cardJSON string) error
-	ReplyText(ctx context.Context, messageID string, text string) error
-	ReplyImage(ctx context.Context, messageID string, localPath string) error
-	ReplyFile(ctx context.Context, messageID string, localPath string) error
-	ReplyCard(ctx context.Context, messageID string, cardID string) error
 }
 
 type idempotentMessageSender interface {
 	SendTextIdempotent(ctx context.Context, openID string, text string, operationID string) error
-	ReplyTextIdempotent(ctx context.Context, messageID string, text string, operationID string) error
 }
 
 type idempotentResultMessageSender interface {
 	SendCardJSONIdempotent(ctx context.Context, openID string, cardJSON string, operationID string) error
-	ReplyCardJSONIdempotent(ctx context.Context, messageID string, cardJSON string, operationID string) error
 }
 
 type createMessageFunc func(ctx context.Context, receiveID string, receiveIDType string, msgType string, content string) (int, string, error)
-type replyMessageFunc func(ctx context.Context, messageID string, msgType string, content string, replyInThread bool) (int, string, error)
 type patchMessageFunc func(ctx context.Context, messageID string, content string) (int, string, error)
 
 type sdkMessageSender struct {
@@ -44,7 +37,6 @@ type sdkMessageSender struct {
 	appID  string
 	guide  *permissionGuideLimiter
 	create createMessageFunc
-	reply  replyMessageFunc
 	patch  patchMessageFunc
 }
 

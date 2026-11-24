@@ -125,7 +125,7 @@ func (a *Adapter) attachReservedResources(req reservedResourceRequest) (bool, er
 // handleDedupOwnershipLoss 明确告知用户原处理者已失去消息处理权。
 func (a *Adapter) handleDedupOwnershipLoss(ctx context.Context, msg platform.IncomingMessage) error {
 	target := firstNonEmpty(msg.ChatID, msg.UserID)
-	replier := NewReplierForMessage(a.sender, target, msg.ReplyToID, a.cardKit).withDeliveryAccount(a.creds.AppID)
+	replier := NewReplier(a.sender, target, a.cardKit).withDeliveryAccount(a.creds.AppID)
 	if err := replier.SendText(ctx, "消息处理状态已失效，请重新发送。"); err != nil {
 		log.Printf("[feishu] failed to send dedup ownership loss notice: %v", err)
 		return err
@@ -147,13 +147,7 @@ func (a *Adapter) handleResourceDownloadFailure(ctx context.Context, msg platfor
 		notice = "附件获取失败：资源不可用，本条消息未执行。请检查附件后重新发送。"
 	}
 	target := firstNonEmpty(msg.ChatID, msg.UserID)
-	var replier *Replier
-	if permission {
-		// 权限错误提示发送到当前聊天，避免回复原图片后创建飞书子会话。
-		replier = NewReplier(a.sender, target, a.cardKit).withDeliveryAccount(a.creds.AppID)
-	} else {
-		replier = NewReplierForMessage(a.sender, target, msg.ReplyToID, a.cardKit).withDeliveryAccount(a.creds.AppID)
-	}
+	replier := NewReplier(a.sender, target, a.cardKit).withDeliveryAccount(a.creds.AppID)
 	sendErr := replier.SendText(ctx, notice)
 	if sendErr != nil {
 		log.Printf("[feishu] failed to send resource download failure notice: %v", sendErr)
@@ -333,9 +327,6 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 	if a.isDuplicateCardActionEvent(action) {
 		log.Printf("[feishu] ignored duplicate card action event: event_id=%s", action.EventID)
 		return duplicateCardActionResponse(), nil
-	}
-	if action.Action == cardActionTaskProgressExpand || action.Action == cardActionTaskProgressCollapse {
-		return a.handleTaskProgressControl(ctx, action, action.Action == cardActionTaskProgressExpand), nil
 	}
 	metadata := map[string]string{"source": "card.action.trigger"}
 	if action.SessionKey != "" {

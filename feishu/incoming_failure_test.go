@@ -84,9 +84,6 @@ func TestHandleMessageEventConsumesAttachmentPermissionFailureInParentChat(t *te
 	if err := adapter.handleMessageEvent(context.Background(), event, dispatch); err != nil {
 		t.Fatalf("permission error should be consumed: %v", err)
 	}
-	if len(sender.replyTexts) != 0 {
-		t.Fatalf("replyTexts=%#v, permission guide must not create a child thread", sender.replyTexts)
-	}
 	if len(sender.texts) != 1 || !strings.Contains(sender.texts[0], "im:message:readonly") {
 		t.Fatalf("texts=%#v, want direct resource permission guide", sender.texts)
 	}
@@ -122,11 +119,8 @@ func TestHandleMessageEventConsumesPermissionFailureWhenNoticeFails(t *testing.T
 
 func assertAttachmentFailureReply(t *testing.T, sender *fakeMessageSender) {
 	t.Helper()
-	if len(sender.texts) != 0 {
-		t.Fatalf("texts=%#v, failure must reply to source message", sender.texts)
-	}
-	if len(sender.replyTexts) != 1 || !strings.Contains(sender.replyTexts[0], "附件获取失败") {
-		t.Fatalf("replyTexts=%#v, want attachment failure notice", sender.replyTexts)
+	if len(sender.texts) != 1 || !strings.Contains(sender.texts[0], "附件获取失败") {
+		t.Fatalf("texts=%#v, want attachment failure notice", sender.texts)
 	}
 }
 
@@ -148,8 +142,8 @@ func TestAttachmentFailureDistinguishesLimitFromUnavailable(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if len(sender.replyTexts) != 1 || !strings.Contains(sender.replyTexts[0], want) || !strings.Contains(sender.replyTexts[0], "未执行") {
-			t.Fatalf("reply=%v", sender.replyTexts)
+		if len(sender.texts) != 1 || !strings.Contains(sender.texts[0], want) || !strings.Contains(sender.texts[0], "未执行") {
+			t.Fatalf("texts=%v", sender.texts)
 		}
 	}
 }

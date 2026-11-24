@@ -163,7 +163,7 @@ func TestAttachmentDownloadOwnershipLossStopsDispatch(t *testing.T) {
 	if dispatches != 0 {
 		t.Fatalf("dispatches=%d, want 0", dispatches)
 	}
-	if len(sender.replyTexts) != 1 || !strings.Contains(sender.replyTexts[0], "状态已失效") {
-		t.Fatalf("replyTexts=%#v", sender.replyTexts)
+	if len(sender.texts) != 1 || !strings.Contains(sender.texts[0], "状态已失效") {
+		t.Fatalf("texts=%#v", sender.texts)
 	}
 }

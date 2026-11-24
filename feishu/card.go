@@ -12,11 +12,9 @@ const (
 	cardStatusDone         = "done"
 	cardStatusError        = "error"
 	cardStatusStopped      = "stopped"
-	cardStatusSuperseded   = "superseded"
-	cardStatusDetached     = "detached"
-	cardMainContentID      = "main_content"
-	cardProgressExpandID   = "progress_expand"
-	cardProgressCollapseID = "progress_collapse"
+	cardStatusSuperseded = "superseded"
+	cardStatusDetached   = "detached"
+	cardMainContentID    = "main_content"
 )
 
 type cardOptions struct {
@@ -24,12 +22,9 @@ type cardOptions struct {
 	Title              string
 	Content            string
 	PreserveWhitespace bool
-	Preview            string
 	Summary            string
 	Approvals          []string
 	WaitingApprovals   int
-	Collapsible        bool
-	Expanded           bool
 	InlineActiveStatus bool
 	taskCardID         string
 }
@@ -45,18 +40,12 @@ func buildCardV2(opts cardOptions) (string, error) {
 	if opts.PreserveWhitespace {
 		content = opts.Content
 	}
-	if opts.Collapsible && !opts.Expanded {
-		if preview := strings.TrimSpace(opts.Preview); preview != "" {
-			content = preview
-		}
-	}
 	compactTerminal := content == "" && isCompactTerminalStatus(status)
 	if content == "" && !compactTerminal {
 		content = statusDefaultContent(status)
 	}
 	if compactTerminal {
 		opts.Summary = ""
-		opts.Collapsible = false
 	}
 	elements := make([]map[string]any, 0, 3)
 	inlineActiveStatus := opts.InlineActiveStatus && (status == cardStatusThinking || status == cardStatusStreaming)
@@ -79,40 +68,15 @@ func buildCardV2(opts cardOptions) (string, error) {
 		}
 	}
 	approvalContent := approvalRecordsContent(opts.Approvals)
-	if opts.Collapsible {
-		if approvalContent != "" {
-			elements = append(elements, map[string]any{
-				"tag":        "markdown",
-				"element_id": "approval_records",
-				"content":    approvalContent,
-			})
-		}
-		taskCardID := strings.TrimSpace(opts.taskCardID)
-		if main != nil {
-			elements = append(elements, main)
-		}
-		if taskCardID != "" && hasProgressPreview(opts.Preview, opts.Content) {
-			if opts.Expanded {
-				elements = append(elements, taskProgressControlButton(
-					cardProgressCollapseID, "收起完整进度", cardActionTaskProgressCollapse, taskCardID,
-				))
-			} else {
-				elements = append(elements, taskProgressControlButton(
-					cardProgressExpandID, "展开完整进度", cardActionTaskProgressExpand, taskCardID,
-				))
-			}
-		}
-	} else {
-		if main != nil {
-			elements = append(elements, main)
-		}
-		if approvalContent != "" {
-			elements = append(elements, map[string]any{
-				"tag":        "markdown",
-				"element_id": "approval_records",
-				"content":    approvalContent,
-			})
-		}
+	if main != nil {
+		elements = append(elements, main)
+	}
+	if approvalContent != "" {
+		elements = append(elements, map[string]any{
+			"tag":        "markdown",
+			"element_id": "approval_records",
+			"content":    approvalContent,
+		})
 	}
 	card := map[string]any{
 		"schema": "2.0",
@@ -142,30 +106,8 @@ func buildCardV2(opts cardOptions) (string, error) {
 	return string(data), nil
 }
 
-func hasProgressPreview(preview, content string) bool {
-	preview = strings.TrimSpace(preview)
-	return preview != "" && preview != strings.TrimSpace(content)
-}
-
 func isCompactTerminalStatus(status string) bool {
 	return status == cardStatusDone || status == cardStatusError || status == cardStatusStopped
-}
-
-func taskProgressControlButton(elementID, label, action, taskCardID string) map[string]any {
-	return map[string]any{
-		"tag":        "button",
-		"element_id": elementID,
-		"text":       map[string]any{"tag": "plain_text", "content": label},
-		"type":       "default",
-		"width":      "fill",
-		"behaviors": []map[string]any{{
-			"type": "callback",
-			"value": map[string]string{
-				"action":       action,
-				"task_card_id": taskCardID,
-			},
-		}},
-	}
 }
 
 func approvalRecordsContent(records []string) string {

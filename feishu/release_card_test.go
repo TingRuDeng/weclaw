@@ -12,7 +12,6 @@ func TestPrepareDetachFromReferenceUsesSynchronizationLanguage(t *testing.T) {
 	payload, err := json.Marshal(feishuStreamReferencePayload{
 		CardID: "card-release", Title: "Codex · project", Sequence: 4,
 		Summary: "已完成代码检查", Details: "1. 已读取实现\n2. 已补充测试",
-		Collapsible: true,
 	})
 	if err != nil {
 		t.Fatal(err)

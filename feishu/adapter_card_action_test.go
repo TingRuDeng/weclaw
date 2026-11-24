@@ -198,9 +198,6 @@ func TestHandleCardActionEventGroupResultUpdatesOriginalCard(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")
 	}
-	if len(sender.replyTexts) != 0 {
-		t.Fatalf("replyTexts=%#v, want no card message thread reply", sender.replyTexts)
-	}
 	if len(sender.texts) != 0 {
 		t.Fatalf("texts=%#v, quick result should update original group card", sender.texts)
 	}
@@ -242,9 +239,6 @@ func TestHandleCardActionEventDMResultUpdatesOriginalCard(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")
-	}
-	if len(sender.replyTexts) != 0 {
-		t.Fatalf("replyTexts=%#v, want no DM reply thread", sender.replyTexts)
 	}
 	if len(sender.texts) != 0 {
 		t.Fatalf("texts=%#v, quick result should update original DM card", sender.texts)

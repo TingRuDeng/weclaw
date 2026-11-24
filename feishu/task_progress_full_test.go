@@ -2,12 +2,24 @@ package feishu
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 )
+
+func taskProgressElementContent(elements []any, elementID string) string {
+	for _, raw := range elements {
+		element := raw.(map[string]any)
+		if element["element_id"] == elementID {
+			if content, ok := element["content"].(string); ok {
+				return content
+			}
+		}
+	}
+	return ""
+}
 
 func assertFullTaskProgress(t *testing.T, raw, want string) {
 	t.Helper()
@@ -18,7 +30,7 @@ func assertFullTaskProgress(t *testing.T, raw, want string) {
 	}
 	for _, raw := range elements {
 		element := raw.(map[string]any)
-		if id := element["element_id"]; id == cardProgressExpandID || id == cardProgressCollapseID {
+		if element["tag"] == "button" {
 			t.Fatalf("unexpected progress control: %#v", element)
 		}
 	}
@@ -41,14 +53,16 @@ func TestTaskCardFullProgressSurvivesUpdatesAndTerminalRecovery(t *testing.T) {
 	s := stream.(*feishuStream)
 	s.throttle = 0
 	assertFullTaskProgress(t, kit.createdCards[0], active)
-	assertFullTaskProgress(t, kit.updateCards[0], active)
+	if len(kit.updateCards) != 0 {
+		t.Fatalf("initial updateCards=%d, want 0 without collapse binding update", len(kit.updateCards))
+	}
 
 	content += "\n\n第七条说明"
 	active = content + "\n\n" + platform.TaskStreamThinkingIndicator
 	if err := s.UpdatePresentation(context.Background(), platform.StreamPresentation{Preview: active, Details: active}); err != nil {
 		t.Fatal(err)
 	}
-	if len(kit.updateCards) != 1 || len(kit.streamTexts) != 1 || kit.streamTexts[0] != active {
+	if len(kit.updateCards) != 0 || len(kit.streamTexts) != 1 || kit.streamTexts[0] != active {
 		t.Fatalf("updates=%d streams=%#v, want all messages in one component update", len(kit.updateCards), kit.streamTexts)
 	}
 	reference, err := s.DurableReference()
@@ -72,44 +86,67 @@ func TestTaskCardFullProgressSurvivesUpdatesAndTerminalRecovery(t *testing.T) {
 	}
 }
 
-func TestTaskCardFullProgressRemovesLegacyControls(t *testing.T) {
-	for _, expanded := range []bool{false, true} {
-		name := "collapsed"
-		if expanded {
-			name = "expanded"
+func TestLegacyOutboxReferenceWithPreviewAndExpandedRecoversFullProgress(t *testing.T) {
+	t.Run("prefers_details_and_ignores_legacy_collapse_fields", func(t *testing.T) {
+		kit := &fakeIdempotentCardKitClient{}
+		afterRestart := newReplierWithTaskCards(nil, "ou_user", kit, newTaskCardRegistry())
+		legacyRef := platform.DurableStreamReference{
+			Kind: feishuStreamReferenceKind,
+			Payload: json.RawMessage(`{
+				"card_id":"card-legacy-1",
+				"title":"Codex",
+				"sequence":5,
+				"summary":"第六步",
+				"preview":"第五步\n\n第六步",
+				"details":"第一步\n\n第五步\n\n第六步\n\n思考中.....",
+				"collapsible":true,
+				"expanded":true,
+				"approvals":["允许本次：读取文件"]
+			}`),
 		}
-		t.Run(name, func(t *testing.T) {
-			kit := &fakeCardKitClient{cardID: "card-legacy"}
-			registry := newTaskCardRegistry()
-			reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, registry)
-			stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
-				Title: "Codex", InitialPresentation: &platform.StreamPresentation{Preview: "第六条说明", Details: "第一条说明\n\n第六条说明"},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if expanded {
-				registry.setExpandedWithSequence("card-legacy", true)
-			}
-			s := stream.(*feishuStream)
-			s.throttle = 0
-			content := "第一条说明\n\n第六条说明\n\n第七条说明"
-			if err := s.UpdatePresentation(context.Background(), platform.StreamPresentation{Preview: content, Details: content}); err != nil {
-				t.Fatal(err)
-			}
-			if len(kit.updateCards) != 2 || len(kit.streamTexts) != 0 {
-				t.Fatalf("updates=%d streams=%d, want one layout update to remove legacy controls", len(kit.updateCards), len(kit.streamTexts))
-			}
-			assertFullTaskProgress(t, kit.updateCards[1], content)
-			content += "\n\n第八条说明"
-			if err := s.UpdatePresentation(context.Background(), platform.StreamPresentation{Preview: content, Details: content}); err != nil {
-				t.Fatal(err)
-			}
-			if len(kit.updateCards) != 2 || len(kit.streamTexts) != 1 || kit.streamTexts[0] != content {
-				t.Fatalf("updates=%d streams=%#v, want subsequent updates to stream full content", len(kit.updateCards), kit.streamTexts)
-			}
-		})
-	}
+		checkpoint, err := afterRestart.PrepareTerminalFromReferenceWithState(legacyRef, "最终结果", platform.StreamTerminalCompleted)
+		if err != nil {
+			t.Fatalf("PrepareTerminalFromReferenceWithState: %v", err)
+		}
+		if err := afterRestart.DeliverTerminal(context.Background(), checkpoint); err != nil {
+			t.Fatalf("DeliverTerminal: %v", err)
+		}
+		assertFullTaskProgress(t, kit.updateCards[len(kit.updateCards)-1], "第一步\n\n第五步\n\n第六步")
+
+		supersede, err := afterRestart.PrepareSupersedeFromReference(legacyRef, "已在下方新卡继续展示。", "reanchor-legacy-preview")
+		if err != nil {
+			t.Fatalf("PrepareSupersedeFromReference: %v", err)
+		}
+		var op feishuStreamTerminalOp
+		if err := json.Unmarshal(supersede.Payload, &op); err != nil {
+			t.Fatalf("decode supersede: %v", err)
+		}
+		assertFullTaskProgress(t, op.CardJSON, "第一步\n\n第五步\n\n第六步\n\n---\n\n已在下方新卡继续展示。")
+	})
+
+	t.Run("falls_back_to_legacy_preview_when_details_and_content_empty", func(t *testing.T) {
+		kit := &fakeIdempotentCardKitClient{}
+		afterRestart := newReplierWithTaskCards(nil, "ou_user", kit, newTaskCardRegistry())
+		legacyRef := platform.DurableStreamReference{
+			Kind: feishuStreamReferenceKind,
+			Payload: json.RawMessage(`{
+				"card_id":"card-legacy-2",
+				"title":"Codex",
+				"sequence":3,
+				"preview":"旧版仅预览进度",
+				"collapsible":true,
+				"expanded":false
+			}`),
+		}
+		checkpoint, err := afterRestart.PrepareTerminalFromReferenceWithState(legacyRef, "最终结果", platform.StreamTerminalStopped)
+		if err != nil {
+			t.Fatalf("PrepareTerminalFromReferenceWithState: %v", err)
+		}
+		if err := afterRestart.DeliverTerminal(context.Background(), checkpoint); err != nil {
+			t.Fatalf("DeliverTerminal: %v", err)
+		}
+		assertFullTaskProgress(t, kit.updateCards[len(kit.updateCards)-1], "旧版仅预览进度")
+	})
 }
 
 func TestTaskCardFullProgressTerminalIncludesUnstreamedSnapshot(t *testing.T) {
@@ -132,34 +169,9 @@ func TestTaskCardFullProgressTerminalIncludesUnstreamedSnapshot(t *testing.T) {
 	}
 	assertFullTaskProgress(t, kit.updateCards[len(kit.updateCards)-1], latest)
 	opts, ok := reply.taskCards.snapshot("card-terminal-snapshot")
-	if !ok || opts.Preview != latest || opts.Content != latest {
+	if !ok || opts.Content != latest {
 		t.Fatalf("terminal registry=%#v, want latest complete snapshot", opts)
 	}
-}
-
-func TestTaskCardFullProgressRetriesFailedLayoutChange(t *testing.T) {
-	kit := &fakeCardKitClient{cardID: "card-retry"}
-	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
-	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
-		Title: "Codex", InitialPresentation: &platform.StreamPresentation{Preview: "预览", Details: "完整说明"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := stream.(*feishuStream)
-	s.throttle = 0
-	p := platform.StreamPresentation{Preview: "完整说明", Details: "完整说明"}
-	kit.updateErrors = []error{errors.New("update failed")}
-	if err := s.UpdatePresentation(context.Background(), p); err == nil {
-		t.Fatal("expected layout update failure")
-	}
-	if err := s.UpdatePresentation(context.Background(), p); err != nil {
-		t.Fatal(err)
-	}
-	if len(kit.updateCards) != 3 || len(kit.streamTexts) != 0 {
-		t.Fatalf("updates=%d streams=%d, want layout retry before component updates", len(kit.updateCards), len(kit.streamTexts))
-	}
-	assertFullTaskProgress(t, kit.updateCards[2], p.Details)
 }
 
 func TestTaskCardFullProgressFreezeDoesNotRestoreThinkingIndicator(t *testing.T) {

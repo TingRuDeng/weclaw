@@ -26,9 +26,6 @@ func TestHandleMessageEventGroupReplyUsesFreshMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleMessageEvent error: %v", err)
 	}
-	if len(sender.replyTexts) != 0 {
-		t.Fatalf("replyTexts=%#v, want no group thread reply", sender.replyTexts)
-	}
 	if len(sender.texts) != 1 || sender.texts[0] != "oc_1:收到" {
 		t.Fatalf("texts=%#v, want fresh group message", sender.texts)
 	}
@@ -50,9 +47,6 @@ func TestHandleMessageEventDMReplyUsesFreshMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleMessageEvent error: %v", err)
 	}
-	if len(sender.replyTexts) != 0 {
-		t.Fatalf("replyTexts=%#v, want no DM reply thread", sender.replyTexts)
-	}
 	if len(sender.texts) != 1 || sender.texts[0] != "oc_1:收到" {
 		t.Fatalf("texts=%#v, want fresh DM message", sender.texts)
 	}
@@ -73,9 +67,6 @@ func TestHandleMessageEventDMNewThreadReplyUsesFreshMessage(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("handleMessageEvent error: %v", err)
-	}
-	if len(sender.replyTexts) != 0 {
-		t.Fatalf("replyTexts=%#v, want no DM reply thread", sender.replyTexts)
 	}
 	if len(sender.texts) != 1 || sender.texts[0] != "oc_1:已开启" {
 		t.Fatalf("texts=%#v, want fresh DM message", sender.texts)
@@ -99,9 +90,6 @@ func TestHandleMessageEventDMThreadReplyUsesFreshMessage(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("handleMessageEvent error: %v", err)
-	}
-	if len(sender.replyTexts) != 0 {
-		t.Fatalf("replyTexts=%#v, want no DM reply thread", sender.replyTexts)
 	}
 	if len(sender.texts) != 1 || sender.texts[0] != "oc_1:收到" {
 		t.Fatalf("texts=%#v, want fresh DM message", sender.texts)

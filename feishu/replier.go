@@ -19,7 +19,6 @@ type Replier struct {
 	cardKit            cardKitClient
 	accountID          string
 	openID             string
-	replyToID          string
 	taskCards          *taskCardRegistry
 	cardOpsMu          sync.Mutex
 	cardOps            *cardKitOperationCoordinator
@@ -39,13 +38,6 @@ func NewReplier(sender messageSender, openID string, cardKitClients ...cardKitCl
 		cardKit = cardKitClients[0]
 	}
 	return &Replier{sender: sender, cardKit: cardKit, openID: openID, cardOps: newCardKitOperationCoordinator()}
-}
-
-// NewReplierForMessage 创建会回复到原飞书消息 / 话题的回复器。
-func NewReplierForMessage(sender messageSender, openID string, replyToID string, cardKitClients ...cardKitClient) *Replier {
-	reply := NewReplier(sender, openID, cardKitClients...)
-	reply.replyToID = strings.TrimSpace(replyToID)
-	return reply
 }
 
 func newReplierWithTaskCards(sender messageSender, openID string, cardKit cardKitClient, cards *taskCardRegistry) *Replier {
@@ -89,12 +81,6 @@ func (r *Replier) Capabilities() platform.Capabilities {
 // SendText 拆分超长文本并逐条发送。
 func (r *Replier) SendText(ctx context.Context, text string) error {
 	for _, chunk := range splitFeishuText(text) {
-		if r.replyToID != "" {
-			if err := r.sender.ReplyText(ctx, r.replyToID, chunk); err != nil {
-				return err
-			}
-			continue
-		}
 		if err := r.sender.SendText(ctx, r.openID, chunk); err != nil {
 			return err
 		}
@@ -111,12 +97,6 @@ func (r *Replier) SendTextIdempotent(ctx context.Context, text string, deliveryK
 	}
 	for index, chunk := range chunks {
 		operationID := terminalTextOperationID(deliveryKey, index)
-		if r.replyToID != "" {
-			if err := sender.ReplyTextIdempotent(ctx, r.replyToID, chunk, operationID); err != nil {
-				return err
-			}
-			continue
-		}
 		if err := sender.SendTextIdempotent(ctx, r.openID, chunk, operationID); err != nil {
 			return err
 		}
@@ -146,12 +126,6 @@ func (r *Replier) SendResultIdempotent(ctx context.Context, result platform.Term
 	}
 	for index, cardJSON := range cards {
 		operationID := terminalTextOperationID(deliveryKey, index)
-		if r.replyToID != "" {
-			if err := sender.ReplyCardJSONIdempotent(ctx, r.replyToID, cardJSON, operationID); err != nil {
-				return err
-			}
-			continue
-		}
 		if err := sender.SendCardJSONIdempotent(ctx, r.openID, cardJSON, operationID); err != nil {
 			return err
 		}
@@ -168,7 +142,7 @@ func terminalTextOperationID(deliveryKey string, index int) string {
 func (r *Replier) DeliveryRoute() platform.DeliveryRoute {
 	return platform.DeliveryRoute{
 		Platform: platform.PlatformFeishu, AccountID: r.accountID,
-		ChatID: r.openID, ReplyToID: r.replyToID,
+		ChatID: r.openID,
 	}
 }
 
@@ -204,17 +178,11 @@ func (r *Replier) DeliverSupersede(ctx context.Context, checkpoint platform.Supe
 
 // SendImage 上传并发送本地图片。
 func (r *Replier) SendImage(ctx context.Context, localPath string) error {
-	if r.replyToID != "" {
-		return r.sender.ReplyImage(ctx, r.replyToID, localPath)
-	}
 	return r.sender.SendImage(ctx, r.openID, localPath)
 }
 
 // SendFile 上传并发送本地文件。
 func (r *Replier) SendFile(ctx context.Context, localPath string) error {
-	if r.replyToID != "" {
-		return r.sender.ReplyFile(ctx, r.replyToID, localPath)
-	}
 	return r.sender.SendFile(ctx, r.openID, localPath)
 }
 
@@ -345,9 +313,6 @@ func (r *Replier) createApprovalPanel(ctx context.Context, taskCardID string, ta
 }
 
 func (r *Replier) sendCard(ctx context.Context, targetOpenID string, cardID string) error {
-	if r.replyToID != "" && targetOpenID == r.openID {
-		return r.sender.ReplyCard(ctx, r.replyToID, cardID)
-	}
 	return r.sender.SendCard(ctx, targetOpenID, cardID)
 }
 

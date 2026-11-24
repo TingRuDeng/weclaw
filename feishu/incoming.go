@@ -175,7 +175,6 @@ func (a *Adapter) toIncomingEnvelopeFromMessage(event *larkim.P2MessageReceiveV1
 		ChatID:       normalized.ChatID,
 		Route:        platform.SessionRoute{Key: sessionKey},
 		MessageID:    normalized.MessageID,
-		ReplyToID:    normalized.MessageID,
 		ContextToken: normalized.MessageID,
 		Text:         text,
 		Metadata:     metadata,

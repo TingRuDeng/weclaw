@@ -115,41 +115,11 @@ func TestSDKMessageSenderUsesUnionIDReceiveTypeForUnionID(t *testing.T) {
 	}
 }
 
-func TestSDKMessageSenderRepliesInThread(t *testing.T) {
-	sender := newTestSDKMessageSender("cli_a", nil)
-
-	err := sender.ReplyText(context.Background(), "om_root", "hello")
-
-	if err != nil {
-		t.Fatalf("ReplyText error: %v", err)
-	}
-	if len(sender.replyCalls) != 1 {
-		t.Fatalf("replyCalls=%#v, want one reply", sender.replyCalls)
-	}
-	call := sender.replyCalls[0]
-	if call.messageID != "om_root" || call.msgType != larkim.MsgTypeText {
-		t.Fatalf("reply call=%#v, want text reply to om_root", call)
-	}
-	if !call.replyInThread {
-		t.Fatalf("reply call=%#v, want reply_in_thread=true", call)
-	}
-	if decodeTextContent(t, call.content) != "hello" {
-		t.Fatalf("reply content=%q, want hello", call.content)
-	}
-}
-
 type createMessageCall struct {
 	receiveID     string
 	receiveIDType string
 	msgType       string
 	content       string
-}
-
-type replyMessageCall struct {
-	messageID     string
-	msgType       string
-	content       string
-	replyInThread bool
 }
 
 type createMessageResult struct {
@@ -160,8 +130,7 @@ type createMessageResult struct {
 
 type testSDKMessageSender struct {
 	*sdkMessageSender
-	calls      []createMessageCall
-	replyCalls []replyMessageCall
+	calls []createMessageCall
 }
 
 func newTestSDKMessageSender(appID string, results []createMessageResult) *testSDKMessageSender {
@@ -176,10 +145,6 @@ func newTestSDKMessageSender(appID string, results []createMessageResult) *testS
 		result := results[0]
 		results = results[1:]
 		return result.code, result.msg, result.err
-	}
-	sender.reply = func(ctx context.Context, messageID string, msgType string, content string, replyInThread bool) (int, string, error) {
-		sender.replyCalls = append(sender.replyCalls, replyMessageCall{messageID: messageID, msgType: msgType, content: content, replyInThread: replyInThread})
-		return 0, "", nil
 	}
 	return sender
 }

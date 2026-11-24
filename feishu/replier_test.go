@@ -11,26 +11,19 @@ import (
 )
 
 type fakeMessageSender struct {
-	texts       []string
-	images      []string
-	files       []string
-	cards       []string
-	patchCards  []string
-	replyTexts  []string
-	replyImages []string
-	replyFiles  []string
-	replyCards  []string
+	texts      []string
+	images     []string
+	files      []string
+	cards      []string
+	patchCards []string
 }
 
 type fakeIdempotentMessageSender struct {
 	fakeMessageSender
-	sendOperations      []string
-	replyOperations     []string
-	sendCardOperations  []string
-	replyCardOperations []string
-	sendCardJSONs       []string
-	replyCardJSONs      []string
-	seen                map[string]bool
+	sendOperations     []string
+	sendCardOperations []string
+	sendCardJSONs      []string
+	seen               map[string]bool
 }
 
 func (f *fakeIdempotentMessageSender) SendTextIdempotent(ctx context.Context, openID string, text string, operationID string) error {
@@ -45,18 +38,6 @@ func (f *fakeIdempotentMessageSender) SendTextIdempotent(ctx context.Context, op
 	return f.SendText(ctx, openID, text)
 }
 
-func (f *fakeIdempotentMessageSender) ReplyTextIdempotent(ctx context.Context, messageID string, text string, operationID string) error {
-	f.replyOperations = append(f.replyOperations, operationID)
-	if f.seen == nil {
-		f.seen = make(map[string]bool)
-	}
-	if f.seen[operationID] {
-		return nil
-	}
-	f.seen[operationID] = true
-	return f.ReplyText(ctx, messageID, text)
-}
-
 func (f *fakeIdempotentMessageSender) SendCardJSONIdempotent(_ context.Context, openID string, cardJSON string, operationID string) error {
 	f.sendCardOperations = append(f.sendCardOperations, operationID)
 	if f.seen == nil {
@@ -67,19 +48,6 @@ func (f *fakeIdempotentMessageSender) SendCardJSONIdempotent(_ context.Context, 
 	}
 	f.seen[operationID] = true
 	f.sendCardJSONs = append(f.sendCardJSONs, openID+":"+cardJSON)
-	return nil
-}
-
-func (f *fakeIdempotentMessageSender) ReplyCardJSONIdempotent(_ context.Context, messageID string, cardJSON string, operationID string) error {
-	f.replyCardOperations = append(f.replyCardOperations, operationID)
-	if f.seen == nil {
-		f.seen = make(map[string]bool)
-	}
-	if f.seen[operationID] {
-		return nil
-	}
-	f.seen[operationID] = true
-	f.replyCardJSONs = append(f.replyCardJSONs, messageID+":"+cardJSON)
 	return nil
 }
 
@@ -127,30 +95,6 @@ func (f *fakeMessageSender) PatchCard(_ context.Context, messageID string, cardJ
 	return nil
 }
 
-// ReplyText 记录测试发送的回复串文本。
-func (f *fakeMessageSender) ReplyText(ctx context.Context, messageID string, text string) error {
-	f.replyTexts = append(f.replyTexts, messageID+":"+text)
-	return nil
-}
-
-// ReplyImage 记录测试发送的回复串图片。
-func (f *fakeMessageSender) ReplyImage(ctx context.Context, messageID string, localPath string) error {
-	f.replyImages = append(f.replyImages, messageID+":"+localPath)
-	return nil
-}
-
-// ReplyFile 记录测试发送的回复串文件。
-func (f *fakeMessageSender) ReplyFile(ctx context.Context, messageID string, localPath string) error {
-	f.replyFiles = append(f.replyFiles, messageID+":"+localPath)
-	return nil
-}
-
-// ReplyCard 记录测试发送的回复串卡片。
-func (f *fakeMessageSender) ReplyCard(ctx context.Context, messageID string, cardID string) error {
-	f.replyCards = append(f.replyCards, messageID+":"+cardID)
-	return nil
-}
-
 func TestReplierSendTextSplitsLongText(t *testing.T) {
 	sender := &fakeMessageSender{}
 	reply := NewReplier(sender, "ou_user")
@@ -166,31 +110,31 @@ func TestReplierSendTextSplitsLongText(t *testing.T) {
 
 func TestReplierSendTextIdempotentUsesStableFeishuUUID(t *testing.T) {
 	sender := &fakeIdempotentMessageSender{}
-	reply := NewReplierForMessage(sender, "oc_group", "om_root")
+	reply := NewReplier(sender, "oc_group")
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := reply.SendTextIdempotent(context.Background(), "终态通知", "delivery-1:notification"); err != nil {
 			t.Fatalf("attempt %d: %v", attempt, err)
 		}
 	}
-	if len(sender.replyOperations) != 2 || sender.replyOperations[0] == "" || sender.replyOperations[0] != sender.replyOperations[1] {
-		t.Fatalf("reply operations=%#v", sender.replyOperations)
+	if len(sender.sendOperations) != 2 || sender.sendOperations[0] == "" || sender.sendOperations[0] != sender.sendOperations[1] {
+		t.Fatalf("send operations=%#v", sender.sendOperations)
 	}
-	if len(sender.replyTexts) != 1 || sender.replyTexts[0] != "om_root:终态通知" {
-		t.Fatalf("reply texts=%#v, want one deduplicated reply", sender.replyTexts)
+	if len(sender.texts) != 1 || sender.texts[0] != "oc_group:终态通知" {
+		t.Fatalf("texts=%#v, want one deduplicated message", sender.texts)
 	}
 }
 
 func TestReplierSendTextIdempotentRejectsNonIdempotentSender(t *testing.T) {
 	sender := &fakeMessageSender{}
-	reply := NewReplierForMessage(sender, "oc_group", "om_root")
+	reply := NewReplier(sender, "oc_group")
 
 	err := reply.SendTextIdempotent(context.Background(), "终态通知", "delivery-1:notification")
 
 	if !errors.Is(err, platform.ErrUnsupported) {
 		t.Fatalf("err=%v, want ErrUnsupported", err)
 	}
-	if len(sender.texts) != 0 || len(sender.replyTexts) != 0 {
-		t.Fatalf("non-idempotent sender must not be called: texts=%#v replies=%#v", sender.texts, sender.replyTexts)
+	if len(sender.texts) != 0 {
+		t.Fatalf("non-idempotent sender must not be called: texts=%#v", sender.texts)
 	}
 }
 
@@ -218,7 +162,7 @@ func TestFeishuPrepareSupersedeFromLegacyReferenceUsesContentFallback(t *testing
 
 func TestReplierSendResultIdempotentUsesStableMarkdownCardUUID(t *testing.T) {
 	sender := &fakeIdempotentMessageSender{}
-	reply := NewReplierForMessage(sender, "oc_group", "om_root")
+	reply := NewReplier(sender, "oc_group")
 	result := platform.TerminalResult{
 		Title: "Codex · jumpserver",
 		Text:  "### 次级问题 #11\n\n请检查结论。",
@@ -230,14 +174,14 @@ func TestReplierSendResultIdempotentUsesStableMarkdownCardUUID(t *testing.T) {
 			t.Fatalf("attempt %d: %v", attempt, err)
 		}
 	}
-	if len(sender.replyCardOperations) != 2 || sender.replyCardOperations[0] == "" ||
-		sender.replyCardOperations[0] != sender.replyCardOperations[1] {
-		t.Fatalf("reply card operations=%#v", sender.replyCardOperations)
+	if len(sender.sendCardOperations) != 2 || sender.sendCardOperations[0] == "" ||
+		sender.sendCardOperations[0] != sender.sendCardOperations[1] {
+		t.Fatalf("send card operations=%#v", sender.sendCardOperations)
 	}
-	if len(sender.replyCardJSONs) != 1 {
-		t.Fatalf("reply cards=%d, want one deduplicated card", len(sender.replyCardJSONs))
+	if len(sender.sendCardJSONs) != 1 {
+		t.Fatalf("send cards=%d, want one deduplicated card", len(sender.sendCardJSONs))
 	}
-	raw := strings.TrimPrefix(sender.replyCardJSONs[0], "om_root:")
+	raw := strings.TrimPrefix(sender.sendCardJSONs[0], "oc_group:")
 	card := parseResultCard(t, raw)
 	if got := resultCardHeaderTitle(t, card); got != "Codex · jumpserver · 最终结果" {
 		t.Fatalf("title=%q", got)
@@ -249,7 +193,7 @@ func TestReplierSendResultIdempotentUsesStableMarkdownCardUUID(t *testing.T) {
 
 func TestReplierSendResultIdempotentRejectsNonIdempotentSender(t *testing.T) {
 	sender := &fakeMessageSender{}
-	reply := NewReplierForMessage(sender, "oc_group", "om_root")
+	reply := NewReplier(sender, "oc_group")
 
 	err := reply.SendResultIdempotent(context.Background(), platform.TerminalResult{
 		Title: "Codex", Text: "结果", State: platform.StreamTerminalCompleted,
@@ -258,23 +202,8 @@ func TestReplierSendResultIdempotentRejectsNonIdempotentSender(t *testing.T) {
 	if !errors.Is(err, platform.ErrUnsupported) {
 		t.Fatalf("err=%v, want ErrUnsupported", err)
 	}
-	if len(sender.texts) != 0 || len(sender.replyTexts) != 0 || len(sender.cards) != 0 || len(sender.replyCards) != 0 {
+	if len(sender.texts) != 0 || len(sender.cards) != 0 {
 		t.Fatalf("non-idempotent sender must not be called: %#v", sender)
-	}
-}
-
-func TestReplierSendTextRepliesToSourceMessage(t *testing.T) {
-	sender := &fakeMessageSender{}
-	reply := NewReplierForMessage(sender, "oc_group", "om_root")
-
-	if err := reply.SendText(context.Background(), "hello"); err != nil {
-		t.Fatalf("SendText error: %v", err)
-	}
-	if len(sender.texts) != 0 {
-		t.Fatalf("texts=%#v, want no fresh message", sender.texts)
-	}
-	if len(sender.replyTexts) != 1 || sender.replyTexts[0] != "om_root:hello" {
-		t.Fatalf("replyTexts=%#v, want reply to source message", sender.replyTexts)
 	}
 }
 
@@ -287,27 +216,6 @@ func TestReplierSendImageUsesSender(t *testing.T) {
 	}
 	if len(sender.images) != 1 || sender.images[0] != "ou_user:/tmp/a.png" {
 		t.Fatalf("images=%#v, want image path", sender.images)
-	}
-}
-
-func TestReplierSendMediaRepliesToSourceMessage(t *testing.T) {
-	sender := &fakeMessageSender{}
-	reply := NewReplierForMessage(sender, "oc_group", "om_root")
-
-	if err := reply.SendImage(context.Background(), "/tmp/a.png"); err != nil {
-		t.Fatalf("SendImage error: %v", err)
-	}
-	if err := reply.SendFile(context.Background(), "/tmp/a.txt"); err != nil {
-		t.Fatalf("SendFile error: %v", err)
-	}
-	if len(sender.images) != 0 || len(sender.files) != 0 {
-		t.Fatalf("fresh media images=%#v files=%#v, want none", sender.images, sender.files)
-	}
-	if len(sender.replyImages) != 1 || sender.replyImages[0] != "om_root:/tmp/a.png" {
-		t.Fatalf("replyImages=%#v, want reply image", sender.replyImages)
-	}
-	if len(sender.replyFiles) != 1 || sender.replyFiles[0] != "om_root:/tmp/a.txt" {
-		t.Fatalf("replyFiles=%#v, want reply file", sender.replyFiles)
 	}
 }
 
@@ -332,49 +240,10 @@ func TestReplierAskChoicesSendsCardWhenCardKitAvailable(t *testing.T) {
 	}
 }
 
-func TestReplierAskChoicesRepliesCardToSourceMessage(t *testing.T) {
-	sender := &fakeMessageSender{}
-	cardKit := &fakeCardKitClient{cardID: "card-choice"}
-	reply := NewReplierForMessage(sender, "oc_group", "om_root", cardKit)
-
-	err := reply.AskChoices(context.Background(), "请选择", []platform.Choice{{ID: "1", Label: "继续"}})
-
-	if err != nil {
-		t.Fatalf("AskChoices error: %v", err)
-	}
-	if len(sender.cards) != 0 {
-		t.Fatalf("cards=%#v, want no fresh card", sender.cards)
-	}
-	if len(sender.replyCards) != 1 || sender.replyCards[0] != "om_root:card-choice" {
-		t.Fatalf("replyCards=%#v, want card reply", sender.replyCards)
-	}
-}
-
-func TestReplierOpenStreamRepliesCardToSourceMessage(t *testing.T) {
-	sender := &fakeMessageSender{}
-	cardKit := &fakeCardKitClient{cardID: "card-task"}
-	reply := NewReplierForMessage(sender, "oc_group", "om_root", cardKit)
-
-	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "thinking"})
-
-	if err != nil {
-		t.Fatalf("OpenStream error: %v", err)
-	}
-	if stream == nil {
-		t.Fatal("OpenStream stream=nil, want stream")
-	}
-	if len(sender.cards) != 0 {
-		t.Fatalf("cards=%#v, want no fresh stream card", sender.cards)
-	}
-	if len(sender.replyCards) != 1 || sender.replyCards[0] != "om_root:card-task" {
-		t.Fatalf("replyCards=%#v, want stream card reply", sender.replyCards)
-	}
-}
-
 func TestReplierApprovalCardStillSendsToOwner(t *testing.T) {
 	sender := &fakeMessageSender{}
 	cardKit := &fakeCardKitClient{cardID: "card-approval"}
-	reply := NewReplierForMessage(sender, "oc_group", "om_root", cardKit)
+	reply := NewReplier(sender, "oc_group", cardKit)
 
 	err := reply.AskChoices(context.Background(), approvalPromptForTest("date"), []platform.Choice{{
 		ID:    "accept",
@@ -387,9 +256,6 @@ func TestReplierApprovalCardStillSendsToOwner(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("AskChoices error: %v", err)
-	}
-	if len(sender.replyCards) != 0 {
-		t.Fatalf("replyCards=%#v, want approval sent to owner DM", sender.replyCards)
 	}
 	if len(sender.cards) != 1 || sender.cards[0] != "ou_owner:card-approval" {
 		t.Fatalf("cards=%#v, want approval owner card", sender.cards)
