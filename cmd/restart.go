@@ -20,14 +20,14 @@ func init() {
 		&restartForceFlag,
 		"force",
 		false,
-		"中断本地任务，关闭 Codex App，并强制停止当前用户的 Codex Host",
+		"中断本地任务（仅显式旧模式会关闭 Codex App 并强制停止当前用户的 Codex Host）",
 	)
 	rootCmd.AddCommand(restartCmd)
 }
 
 var restartCmd = &cobra.Command{
 	Use:   "restart",
-	Short: "协调重启 WeClaw 服务与受管 Codex Host",
+	Short: "重启 WeClaw 服务（显式旧模式时同步协调受管 Codex Host）",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runRestart(
 			context.Background(),
@@ -98,7 +98,7 @@ func runRestart(ctx context.Context, force bool, ops restartOps) error {
 		if force && ops.forceLegacy != nil {
 			return ops.forceLegacy(ctx, prepared.cfg, nil, start)
 		}
-		if ops.acquireLease != nil {
+		if requiresLegacyCodexRestartControl(prepared.cfg) && ops.acquireLease != nil {
 			lease, leaseErr := ops.acquireLease()
 			if leaseErr != nil {
 				return fmt.Errorf("无法开始协调重启: %w；请先退出所有 weclaw codex cli", leaseErr)
@@ -151,18 +151,23 @@ func compensateRestartDrain(
 	return cause
 }
 
+func requiresLegacyCodexRestartControl(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, candidate := range cfg.Agents {
+		if isCodexAppServerAgent(candidate) && !candidate.UsesNativeCodexClient() {
+			return true
+		}
+	}
+	return false
+}
+
 func ensureOfflineCodexRestartSafe(cfg *config.Config, force bool) error {
 	if force {
 		return forceLegacyRuntimeWithLease(context.Background(), cfg, nil, nil, configuredLegacyCodexController, legacyServiceUsesSystemd)
 	}
-	configured := false
-	for _, candidate := range cfg.Agents {
-		if isCodexAppServerAgent(candidate) && !candidate.UsesNativeCodexClient() {
-			configured = true
-			break
-		}
-	}
-	if !configured {
+	if !requiresLegacyCodexRestartControl(cfg) {
 		return nil
 	}
 	socketExists, processExists := agent.CodexDesktopFrontendPresence()

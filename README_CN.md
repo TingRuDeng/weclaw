@@ -392,7 +392,6 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 - 平台 `allowed_users` 为空时默认拒绝所有用户。
 - 当前平台或机器人 `allowed_users` 是远程访问的唯一身份来源；其中每个身份具有相同的 WeClaw 管理能力，机器人账号之间不能串权。
 - 旧配置中的顶层 `admin_users` 只会由启动与 `doctor` 告警并忽略，不自动迁移，也不会扩大任何 `allowed_users`；该值仅为配置文件兼容回写而保留，Web 不展示也不可编辑。
-- 旧配置中的顶层 `allowed_workspace_roots` 仅兼容一个版本的加载和原样保存；运行时忽略，Web 不展示也不可编辑。
 - 只有经过 Registry `allowed_users` 校验并携带授权能力的消息才能进入 Handler；直接构造或绕过 Registry 的消息会被拒绝。
 - 已授权身份可以切换和接管任意本机 Agent 工作空间；真正的文件系统隔离应使用 Agent sandbox、`run_as_user` 和操作系统权限。
 - 本地附件只从消息路由对应的 Agent 工作空间或 WeClaw 专用工作目录回传，并继续拒绝符号链接逃逸。
@@ -406,7 +405,7 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 - `codex_host_mode` 支持 auto、native、daemon、managed、shared。标准 auto 使用 native；自定义 app_server_socket 或 run_as_user 时使用 managed。native、daemon、shared 不可与自定义 socket 或 run_as_user 并用。显式旧模式不自动切换。
 - 显式旧模式的 managed/shared Host、official daemon、受控 `weclaw codex cli` 及协调停止在变更 Host 状态前执行受检 UID 范围内的多 Host 预检；普通模式只读且对额外/不可证明 Host 失败关闭。显式 `--force` 才允许退出 App，并在实时 UID、PGID、启动时间、原始 argv 和命令指纹复核后停止当前用户的 Codex `app-server` 进程组。任何模式都不按名称或旧 PID 停止进程。该检查是时点门禁，不是持续全局锁。
 - `codex_app_reuse_daemon` 仅在显式旧模式解释；标准 auto/native 保留原值但忽略其 App 启动管理语义。旧 shared 的备份恢复使用 weclaw codex app --restore，不退出 App；未备份的变量不猜测删除。
-- 原生 Codex shared app-server 默认使用 `codex_auto_update: incompatible`：只有上游错误明确指出状态库 schema/version 与当前 CLI 不兼容，且没有 writer lease 时，兼容 `managed` 模式才调用官方 `codex update` 并验证版本真实变化。通用 `failed to initialize sqlite state runtime`、数据库锁争用、损坏、socket 就绪超时、调用方取消、普通进程退出和连接错误都不是升级证据。native 与官方 daemon 模式不由 WeClaw 更新 CLI。设为 `off` 可完全禁用；失败或版本未变化时保持不可写，不回退其他 Agent。
+- 标准 `auto`/`native` 的 Codex 配置默认不写入 `codex_auto_update`；仅兼容 `managed` 模式（含自定义 socket/`run_as_user`）缺省时规范化为 `codex_auto_update: incompatible`：只有上游错误明确指出状态库 schema/version 与当前 CLI 不兼容，且没有 writer lease 时，兼容 `managed` 模式才调用官方 `codex update` 并验证版本真实变化。通用 `failed to initialize sqlite state runtime`、数据库锁争用、损坏、socket 就绪超时、调用方取消、普通进程退出和连接错误都不是升级证据。native 与官方 daemon 模式不由 WeClaw 更新 CLI。设为 `off` 可完全禁用；失败或版本未变化时保持不可写，不回退其他 Agent。
 
 | Codex 权限档位 | 行为 |
 | --- | --- |

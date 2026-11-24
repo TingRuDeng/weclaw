@@ -51,8 +51,8 @@ async function loadStatus() {
     appendStatusLine(status, `${p.name}${p.account_id ? ` (${p.account_id})` : ''}: ${p.enabled ? '启用' : '停用'} · 凭证${p.credentials_present ? '已配置' : '缺失'} · 白名单 ${p.allowed_users_count} 人`);
   }
   const agents = (st.agents || []).map(a => {
-    const handoff = a.name === 'claude' ? ` · 本地交接${a.local_command ? '已配置' : '未配置'}` : '';
-    return `${a.name} (${a.type})${handoff}`;
+    const quota = a.name === 'claude' ? ` · 原生额度命令${a.local_command ? '已配置' : '未配置'}` : '';
+    return `${a.name} (${a.type})${quota}`;
   }).join('、');
   appendStatusLine(status, `Agents: ${agents || '无'}`);
 }

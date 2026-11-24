@@ -206,6 +206,7 @@ func NormalizeCodexRemoteFirst(cfg *Config) bool {
 		log.Printf("[config] migrated legacy codex exec backend to single shared app-server")
 	}
 	if agCfg.Type == "acp" && isNativeCodexAppServerConfig(agCfg) &&
+		!agCfg.UsesNativeCodexClient() &&
 		strings.TrimSpace(agCfg.CodexAutoUpdate) == "" {
 		agCfg.CodexAutoUpdate = "incompatible"
 		modified = true

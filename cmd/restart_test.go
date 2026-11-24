@@ -50,11 +50,15 @@ func TestRunRestartPropagatesOfflineForceCodexTermination(t *testing.T) {
 
 func TestRunRestartRejectsActiveControlledCLIWhileOffline(t *testing.T) {
 	prepared := false
+	legacyCfg := config.DefaultConfig()
+	legacyCfg.Agents["codex"] = config.AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"}, CodexHostMode: "shared",
+	}
 	err := runRestart(context.Background(), false, restartOps{
 		acquireLease: func() (io.Closer, error) { return nil, agent.ErrCodexCLIFrontendActive },
 		prepare: func(context.Context) (preparedStart, error) {
 			prepared = true
-			return preparedStart{cfg: config.DefaultConfig()}, nil
+			return preparedStart{cfg: legacyCfg}, nil
 		},
 		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
 		isRunning:  func() bool { return false },
@@ -62,6 +66,29 @@ func TestRunRestartRejectsActiveControlledCLIWhileOffline(t *testing.T) {
 	})
 	if !errors.Is(err, agent.ErrCodexCLIFrontendActive) || !strings.Contains(err.Error(), "退出所有 weclaw codex cli") || !prepared {
 		t.Fatalf("runRestart error=%v prepared=%v", err, prepared)
+	}
+}
+
+func TestRunRestartSkipsCodexLeaseForNativeConfigWhileOffline(t *testing.T) {
+	nativeCfg := config.DefaultConfig()
+	nativeCfg.Agents["codex"] = config.AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+	}
+	started := false
+	err := runRestart(context.Background(), false, restartOps{
+		acquireLease: func() (io.Closer, error) {
+			t.Fatal("native 模式离线重启不应申请旧 Codex frontend 租约")
+			return nil, nil
+		},
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: nativeCfg, run: func() error { started = true; return nil }}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
+		isRunning:  func() bool { return false },
+		out:        &bytes.Buffer{},
+	})
+	if err != nil || !started {
+		t.Fatalf("runRestart error=%v started=%v", err, started)
 	}
 }
 

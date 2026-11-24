@@ -194,13 +194,11 @@ build_assets() {
 	[[ ! -e "$out_dir" ]] || fail "包目录已存在但未通过封装验证，请检查并移走后重新打包：$out_dir"
 	mkdir -p "$out_dir"
 
-	local target goos goarch ext output
+	local target goos goarch output
 	for target in "${TARGETS[@]}"; do
     goos="${target%/*}"
     goarch="${target#*/}"
-    ext=""
-    [[ "$goos" == "windows" ]] && ext=".exe"
-    output="$out_dir/weclaw_${goos}_${goarch}${ext}"
+    output="$out_dir/weclaw_${goos}_${goarch}"
     CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
       go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=$TAG" -o "$output" .
 	done

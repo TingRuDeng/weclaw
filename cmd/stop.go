@@ -19,14 +19,14 @@ func init() {
 		&stopForceFlag,
 		"force",
 		false,
-		"中断本地任务，关闭 Codex App，并强制停止当前用户的 Codex Host",
+		"中断本地任务（仅显式旧模式会关闭 Codex App 并强制停止当前用户的 Codex Host）",
 	)
 	rootCmd.AddCommand(stopCmd)
 }
 
 var stopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "协调停止 WeClaw 服务与受管 Codex Host",
+	Short: "停止 WeClaw 服务（显式旧模式时同步协调受管 Codex Host）",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runStopWithOptions(cmd.Context(), stopForceFlag, defaultStopOps())
 	},

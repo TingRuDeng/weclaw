@@ -1,5 +1,5 @@
 [Unit]
-Description=WeClaw - WeChat AI Agent Bridge
+Description=WeClaw - WeChat & Feishu AI Agent Bridge
 After=network.target
 
 [Service]

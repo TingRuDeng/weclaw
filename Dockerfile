@@ -13,4 +13,4 @@ COPY --from=builder /usr/local/bin/weclaw /usr/local/bin/weclaw
 
 VOLUME /root/.weclaw
 ENTRYPOINT ["weclaw"]
-CMD ["start"]
+CMD ["start", "--foreground"]

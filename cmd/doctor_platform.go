@@ -89,7 +89,7 @@ func checkAllowlist(cfg *config.Config, name string) doctorResult {
 	pc, ok := cfg.Platforms[name]
 	if !ok || len(pc.AllowedUsers) == 0 {
 		result.Status = doctorWarn
-		result.Detail = "empty allow_users → default-deny rejects everyone; add allowed_users"
+		result.Detail = "empty allowed_users → default-deny rejects everyone; add allowed_users"
 		return result
 	}
 	result.Status = doctorOK

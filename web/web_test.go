@@ -29,8 +29,8 @@ func TestFrontendShowsClaudeACPAndLocalHandoffState(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, "a.local_command") || !strings.Contains(text, "本地交接") {
-		t.Fatal("配置面板未展示 Claude ACP 本地交接状态")
+	if !strings.Contains(text, "a.local_command") || !strings.Contains(text, "原生额度命令") {
+		t.Fatal("配置面板未展示 Claude ACP 原生额度命令状态")
 	}
 }
 

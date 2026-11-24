@@ -448,8 +448,8 @@ func TestNormalizeCodexRemoteFirstMigratesCompanion(t *testing.T) {
 	if got.AutoLaunch != nil {
 		t.Fatalf("AutoLaunch=%#v, want nil", got.AutoLaunch)
 	}
-	if got.CodexAutoUpdate != "incompatible" {
-		t.Fatalf("CodexAutoUpdate=%q, want incompatible", got.CodexAutoUpdate)
+	if got.CodexAutoUpdate != "" {
+		t.Fatalf("CodexAutoUpdate=%q, want empty for native default", got.CodexAutoUpdate)
 	}
 }
 
@@ -477,8 +477,8 @@ func TestNormalizeCodexRemoteFirstMigratesLegacyCLI(t *testing.T) {
 	if got.AutoLaunch != nil {
 		t.Fatalf("AutoLaunch=%#v, want nil", got.AutoLaunch)
 	}
-	if got.CodexAutoUpdate != "incompatible" {
-		t.Fatalf("CodexAutoUpdate=%q, want incompatible", got.CodexAutoUpdate)
+	if got.CodexAutoUpdate != "" {
+		t.Fatalf("CodexAutoUpdate=%q, want empty for native default", got.CodexAutoUpdate)
 	}
 	if got.Cwd != "/tmp/work" || got.Env["CODEX_HOME"] != "/tmp/codex-home" || got.Model != "gpt-test" || got.Effort != "high" {
 		t.Fatalf("migration lost shared runtime settings: %#v", got)
@@ -492,11 +492,12 @@ func TestNormalizeCodexRemoteFirstEnablesControlledUpdateForExistingSharedHost(t
 	cfg := DefaultConfig()
 	cfg.Agents["codex"] = AgentConfig{
 		Type: "acp", Command: "/usr/local/bin/codex",
-		Args: []string{"app-server", "--listen", "stdio://"},
+		Args:          []string{"app-server", "--listen", "stdio://"},
+		CodexHostMode: "managed",
 	}
 
 	if !NormalizeCodexRemoteFirst(cfg) {
-		t.Fatal("NormalizeCodexRemoteFirst() = false, want controlled update default")
+		t.Fatal("NormalizeCodexRemoteFirst() = false, want controlled update default for managed mode")
 	}
 	if got := cfg.Agents["codex"].CodexAutoUpdate; got != "incompatible" {
 		t.Fatalf("CodexAutoUpdate=%q, want incompatible", got)
@@ -516,12 +517,12 @@ func TestNormalizeCodexRemoteFirstLeavesNativeFrontendDefaults(t *testing.T) {
 		Args: []string{"app-server", "--listen", "stdio://"},
 	}
 
-	if !NormalizeCodexRemoteFirst(cfg) {
-		t.Fatal("NormalizeCodexRemoteFirst() = false, want shared frontend defaults")
+	if NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("NormalizeCodexRemoteFirst() = true, want native frontend defaults unchanged")
 	}
 	got := cfg.Agents["codex"]
-	if got.CodexMultiFrontend != nil {
-		t.Fatalf("CodexMultiFrontend=%v, want no implicit sharing flag", got.CodexMultiFrontend)
+	if got.CodexMultiFrontend != nil || got.CodexAutoUpdate != "" {
+		t.Fatalf("native config unexpectedly modified: %#v", got)
 	}
 	if got.CodexAppDaemon != nil || !got.UsesNativeCodexClient() {
 		t.Fatalf("native defaults not preserved: %#v", got)
@@ -539,12 +540,12 @@ func TestNormalizeCodexRemoteFirstPreservesExistingAppDaemonFlag(t *testing.T) {
 		Args: []string{"app-server", "--listen", "stdio://"}, CodexAppDaemon: &enabled,
 	}
 
-	if !NormalizeCodexRemoteFirst(cfg) {
-		t.Fatal("NormalizeCodexRemoteFirst() = false, want multi-frontend default")
+	if NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("NormalizeCodexRemoteFirst() = true, want native config with legacy flag unchanged")
 	}
 	got := cfg.Agents["codex"]
-	if got.CodexMultiFrontend != nil || got.CodexAppDaemon == nil || !*got.CodexAppDaemon || got.EffectiveCodexAppDaemon() {
-		t.Fatalf("legacy flag must round-trip without enabling native App reuse: %#v", got)
+	if got.CodexMultiFrontend != nil || got.CodexAutoUpdate != "" || got.CodexAppDaemon == nil || !*got.CodexAppDaemon || got.EffectiveCodexAppDaemon() {
+		t.Fatalf("legacy flag must round-trip without enabling native App reuse or auto-update: %#v", got)
 	}
 }
 
@@ -778,33 +779,6 @@ func TestConfigPreservesLegacyAdminUsersWithoutPromotingThem(t *testing.T) {
 	want := []string{"ou_admin", "wx_admin"}
 	if !reflect.DeepEqual(cfg.LegacyAdminUsers, want) {
 		t.Fatalf("LegacyAdminUsers=%#v, want %#v", cfg.LegacyAdminUsers, want)
-	}
-}
-
-func TestConfigPreservesLegacyAllowedWorkspaceRootsForRoundTrip(t *testing.T) {
-	var cfg Config
-	data := []byte(`{
-		"allowed_workspace_roots": ["/srv/projects", "/opt/work"],
-		"agents": {}
-	}`)
-
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("unmarshal config: %v", err)
-	}
-	want := []string{"/srv/projects", "/opt/work"}
-	if !reflect.DeepEqual(cfg.LegacyAllowedWorkspaceRoots, want) {
-		t.Fatalf("LegacyAllowedWorkspaceRoots=%#v, want %#v", cfg.LegacyAllowedWorkspaceRoots, want)
-	}
-	encoded, err := json.Marshal(cfg)
-	if err != nil {
-		t.Fatalf("marshal config: %v", err)
-	}
-	var roundTrip Config
-	if err := json.Unmarshal(encoded, &roundTrip); err != nil {
-		t.Fatalf("round-trip unmarshal: %v", err)
-	}
-	if !reflect.DeepEqual(roundTrip.LegacyAllowedWorkspaceRoots, want) {
-		t.Fatalf("round-trip LegacyAllowedWorkspaceRoots=%#v, want %#v", roundTrip.LegacyAllowedWorkspaceRoots, want)
 	}
 }
 

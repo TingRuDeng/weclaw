@@ -24,8 +24,8 @@ var updatePackageFlag string
 var updateTargetFlag string
 
 func init() {
-	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "更新后协调重启 WeClaw 与受管 Codex Host")
-	updateCmd.Flags().BoolVar(&restartForceFlag, "force", false, "中断本地任务，关闭 Codex App，并强制停止当前用户的 Codex Host")
+	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "更新后重启 WeClaw 服务（显式旧模式时同步协调受管 Codex Host）")
+	updateCmd.Flags().BoolVar(&restartForceFlag, "force", false, "中断本地任务（仅显式旧模式会关闭 Codex App 并强制停止当前用户的 Codex Host）")
 	updateCmd.Flags().StringVar(&updateSourceFlag, "source", "", "更新来源：auto、github 或 gitee（默认读取配置）")
 	updateCmd.Flags().StringVar(&updatePackageFlag, "from-package", "", "从已封装的本地包目录更新，不查询远端版本、不重启")
 	updateCmd.Flags().StringVar(&updateTargetFlag, "target", "", "本地包安装目标（仅用于 --from-package，默认当前程序）")
