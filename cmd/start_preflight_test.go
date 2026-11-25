@@ -313,7 +313,7 @@ func TestStartRejectsConcurrentUnprobedClaudeConfigChange(t *testing.T) {
 func completeStartPreflightAgentConfig(claudeCommand string) *config.Config {
 	cfg := config.DefaultConfig()
 	for _, name := range []string{
-		"codex", "cursor", "kimi", "gemini", "opencode", "openclaw", "pi",
+		"codex", "cursor", "kimi", "gemini", "openclaw", "pi",
 		"copilot", "droid", "iflow", "kiro", "qwen",
 	} {
 		cfg.Agents[name] = config.AgentConfig{Type: "http", Endpoint: "http://127.0.0.1"}

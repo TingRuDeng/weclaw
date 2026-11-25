@@ -35,7 +35,6 @@ var agentCandidates = []agentCandidate{
 	{Name: "cursor", Binary: "agent", Args: []string{"acp"}, Type: "acp", Model: ""},
 	{Name: "kimi", Binary: "kimi", Args: []string{"acp"}, Type: "acp", Model: ""},
 	{Name: "gemini", Binary: "gemini", Args: []string{"--acp"}, Type: "acp", Model: ""},
-	{Name: "opencode", Binary: "opencode", Type: "companion", Model: ""},
 	{Name: "openclaw", Binary: "openclaw", Type: "acp", Model: "openclaw:main"}, // args built dynamically
 	{Name: "pi", Binary: "pi-acp", Type: "acp", Model: ""},
 	{Name: "copilot", Binary: "copilot", Args: []string{"--acp", "--stdio"}, Type: "acp", Model: ""},
@@ -48,7 +47,7 @@ var agentCandidates = []agentCandidate{
 // defaultOrder defines the priority for choosing the default agent.
 // Lower index = higher priority.
 var defaultOrder = []string{
-	"claude", "codex", "cursor", "kimi", "gemini", "opencode", "openclaw",
+	"claude", "codex", "cursor", "kimi", "gemini", "openclaw",
 	"pi", "copilot", "droid", "iflow", "kiro", "qwen",
 }
 
@@ -195,13 +194,11 @@ func NormalizeCodexRemoteFirst(cfg *Config) bool {
 	if agCfg.Type == "companion" {
 		agCfg.Type = "acp"
 		agCfg.Args = codexRemoteFirstArgs(agCfg.Args)
-		agCfg.AutoLaunch = nil
 		modified = true
 		log.Printf("[config] migrated codex companion to single shared app-server")
 	} else if agCfg.Type == "cli" && isNativeCodexCommand(agCfg.Command) {
 		agCfg.Type = "acp"
 		agCfg.Args = []string{"app-server", "--listen", "stdio://"}
-		agCfg.AutoLaunch = nil
 		modified = true
 		log.Printf("[config] migrated legacy codex exec backend to single shared app-server")
 	}

@@ -272,7 +272,7 @@ func checkAgentBinary(name string, agCfg config.AgentConfig, deps doctorDeps) do
 		result.Status = doctorOK
 		result.Detail = "endpoint " + agCfg.Endpoint
 		return result
-	case "cli", "acp", "companion":
+	case "cli", "acp":
 		if strings.TrimSpace(agCfg.Command) == "" {
 			result.Status = doctorFail
 			result.Detail = "missing command"

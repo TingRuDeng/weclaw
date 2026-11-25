@@ -166,7 +166,6 @@ func mergeView(current *config.Config, v configView) *config.Config {
 			Progress:           prev.Progress,
 			MaxHistory:         prev.MaxHistory,
 			Headers:            prev.Headers,
-			AutoLaunch:         prev.AutoLaunch,
 		}
 		ac.APIKey = mergeSecret(av.APIKey, prev.APIKey)
 		ac.Env = mergeEnv(av.Env, prev.Env)

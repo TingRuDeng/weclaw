@@ -60,12 +60,6 @@ func createAgentByNameWithError(ctx context.Context, cfg *config.Config, name st
 			return nil, fmt.Errorf("HTTP agent %q is invalid or incomplete", name)
 		}
 		return ag, nil
-	case "companion":
-		ag := createCompanionAgent(ctx, name, agCfg)
-		if ag == nil {
-			return nil, fmt.Errorf("companion agent %q failed to start", name)
-		}
-		return ag, nil
 	default:
 		return nil, fmt.Errorf("unknown agent type %q for %q", agCfg.Type, name)
 	}
@@ -97,24 +91,6 @@ func createHTTPAgent(name string, agCfg config.AgentConfig) agent.Agent {
 		return nil
 	}
 	log.Printf("[agent] created HTTP agent: %s (endpoint=%s, model=%s)", name, agCfg.Endpoint, agCfg.Model)
-	return ag
-}
-
-// createCompanionAgent 创建并启动持久 Companion Agent。
-func createCompanionAgent(ctx context.Context, name string, agCfg config.AgentConfig) agent.Agent {
-	if agCfg.Command == "" {
-		log.Printf("[agent] companion agent %q has no command", name)
-		return nil
-	}
-	ag := agent.NewCompanionAgent(agent.CompanionAgentConfig{
-		Name: name, Command: agCfg.Command, Args: agCfg.Args, Cwd: agCfg.Cwd,
-		Env: agCfg.Env, Model: agCfg.Model, AutoLaunch: companionAutoLaunchEnabled(name, agCfg),
-	})
-	if err := ag.Start(ctx); err != nil {
-		log.Printf("[agent] failed to start companion agent %q: %v", name, err)
-		return nil
-	}
-	log.Printf("[agent] started companion agent: %s (command=%s, type=%s)", name, agCfg.Command, agCfg.Type)
 	return ag
 }
 
@@ -217,10 +193,13 @@ func isRetryableCodexStateRuntimeError(err error) bool {
 	return agent.IsCodexStateRuntimeError(err)
 }
 
-// companionAutoLaunchEnabled 读取 Companion 的显式自动启动开关。
-func companionAutoLaunchEnabled(_ string, agCfg config.AgentConfig) bool {
-	if agCfg.AutoLaunch != nil {
-		return *agCfg.AutoLaunch
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
-	return false
 }

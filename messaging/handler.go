@@ -37,7 +37,7 @@ type ProgressChatAgent interface {
 // AgentMeta holds static config info about an agent (for /status display).
 type AgentMeta struct {
 	Name    string
-	Type    string // "acp", "cli", "http", "companion"
+	Type    string // "acp", "cli", "http"
 	Command string // binary path or endpoint
 	Model   string
 	Effort  string

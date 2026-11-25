@@ -219,7 +219,7 @@ flowchart LR
     App[Official App] --> AppHost[Officially selected execution service]
     Daemon -. Resume original thread history .-> AppHost
     Core --> Claude[Single shared ClaudeHost]
-    Core --> Other[Other ACP / HTTP / Companion Agents]
+    Core --> Other[Other ACP / HTTP Agents]
     Codex --> Bindings[Multiple frontend bindings]
     Bindings --> WeChatClient[WeChat window]
     Bindings --> FeishuClient[Feishu window]
@@ -245,8 +245,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | --- | --- | :---: | :---: | --- |
 | Codex | Official daemon protocol client; explicit legacy compatibility | Workspace + thread | Yes | Native CLI connects independently; same-service steer |
 | Claude | Single shared ClaudeHost (ACP) | ACP session + writer lease | Yes | Disabled |
-| OpenCode | Companion | Depends on local connection | Agent-dependent | Visible terminal |
-| Other agents | ACP / HTTP / Companion | Protocol-dependent | Agent-dependent | Configuration-dependent |
+| Other agents | ACP / HTTP | Protocol-dependent | Agent-dependent | Configuration-dependent |
 
 ## Chat Commands
 

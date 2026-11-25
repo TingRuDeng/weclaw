@@ -442,9 +442,3 @@ type CodexCredits struct {
 type CodexQuotaAgent interface {
 	ReadCodexQuota(ctx context.Context) (CodexQuota, error)
 }
-
-// VisibleCompanionAgent 支持显式打开或断开本地可见 Companion。
-type VisibleCompanionAgent interface {
-	OpenVisibleCompanion(ctx context.Context) error
-	DetachVisibleCompanion() bool
-}

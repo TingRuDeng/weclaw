@@ -61,7 +61,7 @@ func (c FeishuBotConfig) EffectiveRequireMentionInGroup() bool {
 
 // AgentConfig holds configuration for a single agent.
 type AgentConfig struct {
-	Type               string            `json:"type"`                             // "acp", "cli", "http", or "companion"
+	Type               string            `json:"type"`                             // "acp", "cli", or "http"
 	Command            string            `json:"command,omitempty"`                // binary path (cli/acp type)
 	LocalCommand       string            `json:"local_command,omitempty"`          // Claude 账号额度查询回退使用的原生命令
 	Args               []string          `json:"args,omitempty"`                   // extra args for command (e.g. ["acp"] for cursor)
@@ -80,7 +80,6 @@ type AgentConfig struct {
 	Headers            map[string]string `json:"headers,omitempty"`                // extra HTTP headers (http type)
 	MaxHistory         int               `json:"max_history,omitempty"`            // max history (http type)
 	Progress           *ProgressConfig   `json:"progress,omitempty"`               // 微信进度反馈配置
-	AutoLaunch         *bool             `json:"auto_launch,omitempty"`            // companion 是否自动打开本地可见终端
 	AppServerSocket    string            `json:"app_server_socket,omitempty"`      // Codex 单一 app-server 的共享 Unix socket
 	CodexHostMode      string            `json:"codex_host_mode,omitempty"`        // Codex Host：auto / native / daemon / managed / shared
 	CodexMultiFrontend *bool             `json:"codex_multi_frontend,omitempty"`   // Codex App、受控 CLI 与消息平台是否强制共享同一官方服务

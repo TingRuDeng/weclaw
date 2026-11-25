@@ -127,24 +127,6 @@ type fakeCodexThreadAgent struct {
 	quotaErr           error
 }
 
-type fakeVisibleCodexAgent struct {
-	fakeCodexThreadAgent
-	openCalls   int
-	detachCalls int
-	detachOK    bool
-	openErr     error
-}
-
-func (f *fakeVisibleCodexAgent) OpenVisibleCompanion(_ context.Context) error {
-	f.openCalls++
-	return f.openErr
-}
-
-func (f *fakeVisibleCodexAgent) DetachVisibleCompanion() bool {
-	f.detachCalls++
-	return f.detachOK
-}
-
 func (f *fakeCodexThreadAgent) CurrentCodexThread(conversationID string) (string, bool) {
 	if f.threadID == "" {
 		return "", false

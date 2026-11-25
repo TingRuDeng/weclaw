@@ -209,27 +209,6 @@ func TestAgentConfigWithoutEnvStillLoads(t *testing.T) {
 	}
 }
 
-func TestAgentConfigUnmarshalAutoLaunch(t *testing.T) {
-	var cfg Config
-	data := []byte(`{
-		"agents": {
-			"codex": {
-				"type": "companion",
-				"command": "codex",
-				"auto_launch": false
-			}
-		}
-	}`)
-
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("unmarshal config: %v", err)
-	}
-	got := cfg.Agents["codex"].AutoLaunch
-	if got == nil || *got {
-		t.Fatalf("AutoLaunch = %#v, want false pointer", got)
-	}
-}
-
 func TestAgentConfigUnmarshalAppServerSocket(t *testing.T) {
 	var cfg Config
 	data := []byte(`{
@@ -424,14 +403,12 @@ func TestValidateRejectsInvalidCodexAppDaemonCombinations(t *testing.T) {
 }
 
 func TestNormalizeCodexRemoteFirstMigratesCompanion(t *testing.T) {
-	autoLaunch := true
 	cfg := DefaultConfig()
 	cfg.Agents["codex"] = AgentConfig{
-		Type:       "companion",
-		Command:    "codex",
-		Args:       []string{"-c", "model=\"gpt-test\""},
-		Cwd:        "/tmp/work",
-		AutoLaunch: &autoLaunch,
+		Type:    "companion",
+		Command: "codex",
+		Args:    []string{"-c", "model=\"gpt-test\""},
+		Cwd:     "/tmp/work",
 	}
 
 	if !NormalizeCodexRemoteFirst(cfg) {
@@ -445,22 +422,18 @@ func TestNormalizeCodexRemoteFirstMigratesCompanion(t *testing.T) {
 	if !reflect.DeepEqual(got.Args, wantArgs) {
 		t.Fatalf("Args=%#v, want %#v", got.Args, wantArgs)
 	}
-	if got.AutoLaunch != nil {
-		t.Fatalf("AutoLaunch=%#v, want nil", got.AutoLaunch)
-	}
 	if got.CodexAutoUpdate != "" {
 		t.Fatalf("CodexAutoUpdate=%q, want empty for native default", got.CodexAutoUpdate)
 	}
 }
 
 func TestNormalizeCodexRemoteFirstMigratesLegacyCLI(t *testing.T) {
-	autoLaunch := true
 	cfg := DefaultConfig()
 	cfg.Agents["codex"] = AgentConfig{
 		Type: "cli", Command: "/usr/local/bin/codex",
 		Args: []string{"exec", "--skip-git-repo-check"},
 		Cwd:  "/tmp/work", Env: map[string]string{"CODEX_HOME": "/tmp/codex-home"},
-		Model: "gpt-test", Effort: "high", AutoLaunch: &autoLaunch,
+		Model: "gpt-test", Effort: "high",
 	}
 
 	if !NormalizeCodexRemoteFirst(cfg) {
@@ -473,9 +446,6 @@ func TestNormalizeCodexRemoteFirstMigratesLegacyCLI(t *testing.T) {
 	wantArgs := []string{"app-server", "--listen", "stdio://"}
 	if !reflect.DeepEqual(got.Args, wantArgs) {
 		t.Fatalf("Args=%#v, want %#v", got.Args, wantArgs)
-	}
-	if got.AutoLaunch != nil {
-		t.Fatalf("AutoLaunch=%#v, want nil", got.AutoLaunch)
 	}
 	if got.CodexAutoUpdate != "" {
 		t.Fatalf("CodexAutoUpdate=%q, want empty for native default", got.CodexAutoUpdate)

@@ -84,7 +84,7 @@ func validateConfig(cfg *config.Config) error {
 			if strings.TrimSpace(ag.Endpoint) == "" {
 				return fmt.Errorf("agent %q: http type requires endpoint", name)
 			}
-		case "cli", "acp", "companion":
+		case "cli", "acp":
 			if strings.TrimSpace(ag.Command) == "" {
 				return fmt.Errorf("agent %q: %s type requires command", name, ag.Type)
 			}

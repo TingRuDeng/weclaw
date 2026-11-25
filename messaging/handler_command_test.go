@@ -112,9 +112,8 @@ func TestResolveAlias(t *testing.T) {
 		"cx":  "codex",
 		"oc":  "openclaw",
 		"cs":  "cursor",
-		"km":  "kimi",
-		"gm":  "gemini",
-		"ocd": "opencode",
+		"km": "kimi",
+		"gm": "gemini",
 	}
 	for alias, want := range tests {
 		got := h.resolveAlias(alias)

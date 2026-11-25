@@ -219,7 +219,7 @@ flowchart LR
     App[官方 App] --> AppHost[官方选择的执行端]
     Daemon -. 原 thread 历史恢复 .-> AppHost
     Core --> Claude[单一共享 ClaudeHost]
-    Core --> Other[其他 ACP / HTTP / Companion Agent]
+    Core --> Other[其他 ACP / HTTP Agent]
     Codex --> Bindings[多个 frontend binding]
     Bindings --> WeChatClient[微信窗口]
     Bindings --> FeishuClient[飞书窗口]
@@ -245,8 +245,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 | --- | --- | :---: | :---: | --- |
 | Codex | 官方 daemon 协议客户端；旧模式显式兼容 | Workspace + thread | 是 | 原生 CLI 独立连接；同一执行端可 steer |
 | Claude | 单一共享 ClaudeHost（ACP） | ACP session + writer lease | ✅ | 禁止 |
-| OpenCode | Companion | 取决于本地连接 | 取决于 Agent | 可见终端 |
-| 其他 Agent | ACP / HTTP / Companion | 取决于协议能力 | 取决于 Agent | 取决于配置 |
+| 其他 Agent | ACP / HTTP | 取决于协议能力 | 取决于 Agent | 取决于配置 |
 
 ## 聊天命令
 

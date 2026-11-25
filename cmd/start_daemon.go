@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
@@ -50,9 +49,6 @@ func runDaemon(claudePreflightFingerprint string) error {
 	}
 	if err := runtimeLock.Close(); err != nil {
 		return err
-	}
-	if err := agent.CleanupCompanionEndpoints(); err != nil {
-		return fmt.Errorf("cleanup companion endpoints: %w", err)
 	}
 
 	// 后台子进程 stdout/stderr 都写入统一日志文件。

@@ -128,21 +128,6 @@ func TestDetectAndConfigure_StrippedPath(t *testing.T) {
 	}
 }
 
-func TestDetectAndConfigureOpenCodeUsesCompanion(t *testing.T) {
-	withAgentDetection(t, map[string]string{"opencode": "/fake/bin/opencode"}, nil)
-
-	cfg := DefaultConfig()
-	DetectAndConfigure(cfg)
-
-	agent, ok := cfg.Agents["opencode"]
-	if !ok {
-		t.Fatal("expected opencode to be detected")
-	}
-	if agent.Type != "companion" {
-		t.Fatalf("opencode type = %q, want companion", agent.Type)
-	}
-}
-
 func TestDetectAndConfigureDoesNotFallbackToCodexExec(t *testing.T) {
 	paths := map[string]string{"codex": "/fake/bin/codex"}
 	probes := map[string]bool{
