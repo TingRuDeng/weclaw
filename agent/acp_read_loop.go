@@ -308,6 +308,9 @@ func (a *ACPAgent) failRuntimeWaitersUncertain(reason string) {
 }
 
 func (a *ACPAgent) failRuntimeWaitersUncertainWithCause(reason string, cause error) {
+	if cause == nil {
+		cause = errACPRuntimeExited
+	}
 	a.interruptActiveTurns(reason)
 	a.pending.failAllWithCause(reason, cause)
 }

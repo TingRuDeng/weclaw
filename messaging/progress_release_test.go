@@ -217,3 +217,83 @@ func TestCodexFirstTurnReplacementRecoversTracePersistenceFailureAfterRestart(t 
 		t.Fatalf("repaired active turn exposed false terminal recovery: %v", due)
 	}
 }
+
+type slowProgressUpdateStream struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *slowProgressUpdateStream) Update(ctx context.Context, _ string) error {
+	select {
+	case <-s.started:
+	default:
+		close(s.started)
+	}
+	select {
+	case <-s.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *slowProgressUpdateStream) Complete(context.Context, string) error { return nil }
+func (s *slowProgressUpdateStream) Fail(context.Context, string) error     { return nil }
+
+type slowProgressUpdateReplier struct {
+	stream *slowProgressUpdateStream
+}
+
+func (r *slowProgressUpdateReplier) Capabilities() platform.Capabilities {
+	return platform.Capabilities{Text: true, Streaming: true}
+}
+func (r *slowProgressUpdateReplier) SendText(context.Context, string) error  { return nil }
+func (r *slowProgressUpdateReplier) SendImage(context.Context, string) error { return nil }
+func (r *slowProgressUpdateReplier) SendFile(context.Context, string) error  { return nil }
+func (r *slowProgressUpdateReplier) Typing(context.Context, bool) error      { return nil }
+func (r *slowProgressUpdateReplier) AskChoices(context.Context, string, []platform.Choice) error {
+	return nil
+}
+func (r *slowProgressUpdateReplier) OpenStream(context.Context, platform.StreamOptions) (platform.Stream, error) {
+	return r.stream, nil
+}
+
+func TestProgressSessionStateClaimsDoNotBlockBehindSlowStreamUpdate(t *testing.T) {
+	h := NewHandler(nil, nil)
+	stream := &slowProgressUpdateStream{started: make(chan struct{}), release: make(chan struct{})}
+	defer close(stream.release)
+	reply := &slowProgressUpdateReplier{stream: stream}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+
+	_, _, session := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "codex", "/workspace/project", "慢网络任务", cfg,
+	)
+	updateDone := make(chan struct{})
+	go func() {
+		session.sendContent("慢网络进度更新", true)
+		close(updateDone)
+	}()
+	select {
+	case <-stream.started:
+	case <-time.After(time.Second):
+		t.Fatal("未等到进度流进入慢网络 Update")
+	}
+
+	claimDone := make(chan bool, 1)
+	go func() {
+		claimDone <- session.claimDetachWithoutTerminal()
+	}()
+	select {
+	case claimed := <-claimDone:
+		if !claimed {
+			t.Fatal("claimDetachWithoutTerminal 应在流尚未终态时抢占成功")
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("claimDetachWithoutTerminal 被慢网络流更新阻塞，存在锁层级反转风险")
+	}
+	session.stopBackground()
+	<-updateDone
+}

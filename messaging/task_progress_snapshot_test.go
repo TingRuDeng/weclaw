@@ -551,7 +551,7 @@ func TestProgressPresentationShowsAllStructuredItems(t *testing.T) {
 		timelineItems: events,
 	}
 
-	presentation := session.snapshotPresentationLocked(snapshot)
+	presentation := session.snapshotPresentationStateLocked(snapshot)
 
 	if presentation.Preview != presentation.Details {
 		t.Fatalf("preview=%q, want full details=%q", presentation.Preview, presentation.Details)

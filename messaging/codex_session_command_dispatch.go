@@ -92,8 +92,8 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 		ctx: ctx, req: req, actorUserID: actorUserID, routeUserID: routeUserID,
 		admin: h.codexSessionCommandAdmin(req, actorUserID), private: req.Private, fields: fields,
 		agentName: agentName, agent: ag,
-		bindingKey:      codexBindingKey(routeUserID, agentName),
-		workspaceRoot:   h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag),
+		bindingKey:    codexBindingKey(routeUserID, agentName),
+		workspaceRoot: h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag),
 	}
 	if renameHandled {
 		runtime.renameSpec = &renameSpec
@@ -148,9 +148,9 @@ func (h *Handler) prepareCodexCdCommand(
 	runtime := codexSessionCommandRuntime{
 		ctx: ctx, req: req, actorUserID: actorUserID, routeUserID: routeUserID,
 		admin: h.codexSessionCommandAdmin(req, actorUserID), private: req.Private, fields: fields,
-		agentName:       agentName,
-		agent:           h.AgentByName(agentName),
-		bindingKey:      codexBindingKey(routeUserID, agentName),
+		agentName:  agentName,
+		agent:      h.AgentByName(agentName),
+		bindingKey: codexBindingKey(routeUserID, agentName),
 	}
 	unlockRegistry := h.lockWorkspaceRegistryControl()
 	unlock, err := h.lockCodexSessionBinding(ctx, runtime.bindingKey, fields[1])
@@ -331,7 +331,7 @@ func (runtime codexSessionCommandRuntime) shortSelectionRequest() codexShortSele
 		RouteIsGroup: runtime.req.RouteIsGroup,
 		AgentName: runtime.agentName, WorkspaceRoot: runtime.workspaceRoot,
 		Agent: runtime.agent, BindingKey: runtime.bindingKey, Target: runtime.fields[1],
-		Platform: runtime.req.Platform,
+		Platform:  runtime.req.Platform,
 		AccountID: runtime.req.AccountID, Reply: runtime.req.Reply, Admin: runtime.admin,
 		TaskContext: runtime.externalTaskCtx,
 	}
@@ -344,7 +344,7 @@ func (runtime codexSessionCommandRuntime) workspaceCdRequest(target string) code
 		UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID, AuthorizedIdentity: runtime.req.AuthorizedIdentity,
 		RouteIsGroup: runtime.req.RouteIsGroup,
 		BindingKey: runtime.bindingKey,
-		AgentName: runtime.agentName, Target: target, Agent: runtime.agent,
+		AgentName:  runtime.agentName, Target: target, Agent: runtime.agent,
 		Platform: runtime.req.Platform, AccountID: runtime.req.AccountID,
 		Reply: runtime.req.Reply, Admin: runtime.admin,
 	}

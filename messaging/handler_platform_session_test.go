@@ -55,6 +55,7 @@ func TestHandleMessageUsesPlatformDefaultAgent(t *testing.T) {
 		UserID:   "user-1",
 		Text:     "hello",
 	}, reply)
+	waitForHandlerTasksIdle(t, h)
 
 	if !claude.wasChatCalled() {
 		t.Fatal("claude was not called for feishu platform default agent")
@@ -89,6 +90,7 @@ func TestHandleMessageUsesFeishuAccountDefaultAgent(t *testing.T) {
 		UserID:    "user-1",
 		Text:      "hello",
 	}, reply)
+	waitForHandlerTasksIdle(t, h)
 
 	if !claude.wasChatCalled() {
 		t.Fatal("claude was not called for feishu account default agent")
@@ -139,6 +141,7 @@ func TestHandleMessageUsesPersistedSessionDefaultAgent(t *testing.T) {
 	sessionA.MessageID = "message-a"
 	sessionA.Text = "hello"
 	restored.handleMessageForTest(context.Background(), sessionA, reply)
+	waitForHandlerTasksIdle(t, restored)
 	if !claude.wasChatCalled() {
 		t.Fatal("当前会话重启恢复后应调用 claude")
 	}
@@ -147,7 +150,7 @@ func TestHandleMessageUsesPersistedSessionDefaultAgent(t *testing.T) {
 	sessionB.MessageID = "message-b"
 	sessionB.Metadata = map[string]string{"feishu_session_key": "feishu:tenant:dm:chat-b:user-1"}
 	restored.handleMessageForTest(context.Background(), sessionB, reply)
-	waitForFakeAgentCalls(t, codex, 1)
+	waitForHandlerTasksIdle(t, restored)
 	if codex.chatCallCount() != 1 {
 		t.Fatalf("其他会话 codex 调用次数=%d，期望 1", codex.chatCallCount())
 	}
@@ -211,6 +214,7 @@ func TestNamedAgentMessageDoesNotChangeSessionDefaultAgent(t *testing.T) {
 		Metadata:  map[string]string{"feishu_session_key": "feishu:tenant:dm:chat-a:user-1"},
 	}
 	h.handleMessageForTest(context.Background(), message, platformtest.NewReplier(platform.Capabilities{Text: true}))
+	waitForHandlerTasksIdle(t, h)
 	if _, ok := h.ensureAgentSessions().Get(platformMessageRouteUserID(message)); ok {
 		t.Fatal("带内容的 Agent 命令不应修改会话默认 Agent")
 	}
@@ -232,6 +236,7 @@ func TestAgentSwitchFailureDoesNotChangeSessionDefaultAgent(t *testing.T) {
 		Metadata:  map[string]string{"feishu_session_key": "feishu:tenant:dm:chat-a:user-1"},
 	}
 	h.handleMessageForTest(context.Background(), message, platformtest.NewReplier(platform.Capabilities{Text: true}))
+	waitForHandlerTasksIdle(t, h)
 	if _, ok := h.ensureAgentSessions().Get(platformMessageRouteUserID(message)); ok {
 		t.Fatal("Agent 启动失败时不应修改会话默认 Agent")
 	}
@@ -254,6 +259,7 @@ func TestHandleMessageUsesFeishuSessionMetadataForRouting(t *testing.T) {
 		Text:     "hello",
 		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
 	}, reply)
+	waitForHandlerTasksIdle(t, h)
 
 	if got := ag.lastChatConversationID(); got != "feishu:tenant_1:group:oc_1:om_root" {
 		t.Fatalf("conversationID=%q, want feishu metadata session key", got)
@@ -281,6 +287,7 @@ func TestHandleMessageKeepsFeishuChoiceLikeFinalReplyAsText(t *testing.T) {
 		Text:     "开始",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
 	}, reply)
+	waitForHandlerTasksIdle(t, h)
 
 	if len(reply.Texts) != 1 || reply.Texts[0] != ag.reply {
 		t.Fatalf("texts=%#v, want original final reply", reply.Texts)
@@ -311,6 +318,7 @@ func TestHandleMessageKeepsFeishuSenderUserIDForLogs(t *testing.T) {
 		Text:     "top-secret-message",
 		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
 	}, reply)
+	waitForHandlerTasksIdle(t, h)
 
 	output := logs.String()
 	if !strings.Contains(output, "received from ou_user") {

@@ -104,6 +104,17 @@ func waitForFakeAgentCalls(t *testing.T, ag *fakeAgent, want int) {
 	t.Fatalf("未等到 fake agent 调用次数=%d，实际=%d", want, ag.chatCallCount())
 }
 
+// waitForHandlerTasksIdle 等待所有后台任务彻底完成回复投递并从活动表移除，避免并发读写测试桩。
+func waitForHandlerTasksIdle(t *testing.T, h *Handler) {
+	t.Helper()
+	waitUntil(t, func() bool {
+		h.tasks.mu.Lock()
+		empty := len(h.tasks.active) == 0
+		h.tasks.mu.Unlock()
+		return empty
+	})
+}
+
 const testWeChatRoute = "wechat:bot-1:user-1"
 
 func newTextMessage(id int64, text string) ilink.WeixinMessage {

@@ -271,3 +271,36 @@ func TestStatusCommandDoesNotWaitForOnDemandAgentStart(t *testing.T) {
 		t.Fatalf("status texts=%#v, want runtime status", texts)
 	}
 }
+
+func TestSynchronousAgentReturnsImmediatelySoSameUserCanStop(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	ag.fakeAgent.info = agent.AgentInfo{Name: "cli-agent", Type: "cli", Command: "cli-agent"}
+	h.SetDefaultAgent("cli-agent", ag)
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	firstDone := make(chan struct{})
+	go func() {
+		handleTestWeChatMessage(h, ctx, client, newTextMessage(501, "执行长任务"))
+		close(firstDone)
+	}()
+	waitForAgentEnter(t, ag)
+
+	select {
+	case <-firstDone:
+	case <-time.After(150 * time.Millisecond):
+		ag.release <- struct{}{}
+		t.Fatal("非后台 Agent 消息应在后台启动后立即返回，不得阻塞同一用户的 /stop 或 /status")
+	}
+
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(502, "/stop"))
+	waitForText(t, calls, "已停止当前任务")
+	waitForHandlerTasksIdle(t, h)
+}

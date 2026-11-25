@@ -37,6 +37,7 @@ func TestNativeStreamProgressUsesLatestCodexAppLine(t *testing.T) {
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
+	waitForHandlerTasksIdle(t, h)
 
 	if len(reply.Stream.Updates) == 0 {
 		t.Fatal("stream should receive progress updates")
@@ -76,6 +77,7 @@ func TestFinalReplyOutsideStreamDoesNotPutOrdinaryAnswerInCard(t *testing.T) {
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
+	waitForHandlerTasksIdle(t, h)
 
 	if reply.Stream.Completed != "[mock] 进展：Agent 正在整理结果。" {
 		t.Fatalf("completed=%q, want terminal task card to retain the latest Agent progress", reply.Stream.Completed)
@@ -119,6 +121,7 @@ func TestHandlePlatformMessagePassesTextAndImageToAgent(t *testing.T) {
 			FileName: "input.png",
 		}},
 	}, "ou_user"), reply)
+	waitForHandlerTasksIdle(t, h)
 
 	if !strings.Contains(ag.lastChatMessage(), "请分析这张图") ||
 		!strings.Contains(ag.lastChatMessage(), "用户发送了一张图片") ||
@@ -150,6 +153,7 @@ func TestHandlePlatformMessagePassesImageOnlyToAgent(t *testing.T) {
 			Metadata: map[string]string{"temporary": "true"},
 		}},
 	}, "ou_user"), reply)
+	waitForHandlerTasksIdle(t, h)
 
 	if !strings.Contains(ag.lastChatMessage(), "用户发送了一张图片") ||
 		!strings.Contains(ag.lastChatMessage(), "文件名：mobile-input.png") ||

@@ -119,9 +119,13 @@ func newAgentTaskOptions(runtime agentDispatchRuntime) agentTaskOptions {
 	}
 }
 
-// runSynchronousAgentMessage 为非后台 Agent 建立互斥锁和可停止任务状态。
+// runSynchronousAgentMessage 为非后台 Agent 建立互斥锁、可停止任务状态并在独立 goroutine 中执行，
+// 避免长耗时任务阻塞同一用户的控制命令（如 /stop、/status）或审批回复。
 func (h *Handler) runSynchronousAgentMessage(runtime synchronousAgentRuntime) {
-	agentCtx, cancel := contextWithTaskTimeout(runtime.req.ctx, runtime.progressCfg)
+	taskParentCtx := context.WithoutCancel(runtime.req.ctx)
+	runtime.req.ctx = taskParentCtx
+	runtime.replyCtx = taskParentCtx
+	agentCtx, cancel := contextWithTaskTimeout(taskParentCtx, runtime.progressCfg)
 	key := h.agentExecutionKeyForRoute(runtime.req.userID, runtime.req.routeUserID, runtime.req.name, runtime.agent)
 	admission := h.beginOrQueueActiveTask(agentCtx, key, activeTaskMeta{
 		owner: runtime.req.userID, routeUserID: runtime.req.routeUserID,
@@ -141,14 +145,18 @@ func (h *Handler) runSynchronousAgentMessage(runtime synchronousAgentRuntime) {
 		actorUserID: runtime.req.userID, routeUserID: runtime.req.routeUserID, routeIsGroup: runtime.req.routeIsGroup,
 		agentName: runtime.req.name, reply: runtime.req.reply,
 	})
-	unlock := h.lockAgentExecution(key)
 	runtime.lifecycle = h.startAgentTaskLifecycle(agentTaskLifecycleOptions{
 		taskCtx: taskCtx, replyCtx: runtime.replyCtx, reply: runtime.req.reply,
 		task: admission.task, cancel: cancel, executionKey: key,
 		userID: runtime.req.userID, agentName: runtime.req.name, message: runtime.req.message,
 		replyPrefix: runtime.prefix, progressConfig: runtime.progressCfg, trace: admission.task.traceSnapshot(),
 	})
+	go h.runSynchronousAgentTask(runtime, key)
+}
+
+func (h *Handler) runSynchronousAgentTask(runtime synchronousAgentRuntime, key string) {
 	defer h.completeAgentTaskLifecycle(runtime.lifecycle)
+	unlock := h.lockAgentExecution(key)
 	defer unlock()
 	h.executeSynchronousAgentMessage(runtime)
 }

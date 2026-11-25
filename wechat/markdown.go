@@ -7,19 +7,20 @@ import (
 )
 
 var (
-	reCodeBlock  = regexp.MustCompile("(?s)```[^\n]*\n?(.*?)```")
-	reInlineCode = regexp.MustCompile("`([^`]+)`")
-	reImage      = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]*)\)`)
-	reLink       = regexp.MustCompile(`\[([^\]]+)\]\(([^)]*)\)`)
-	reTableSep   = regexp.MustCompile(`(?m)^\|[\s:|\-]+\|$`)
-	reTableRow   = regexp.MustCompile(`(?m)^\|(.+)\|$`)
-	reHeader     = regexp.MustCompile(`(?m)^#{1,6}\s+`)
-	reBold       = regexp.MustCompile(`\*\*(.+?)\*\*|__(.+?)__`)
-	reStrike     = regexp.MustCompile(`~~(.+?)~~`)
-	reBlockquote = regexp.MustCompile(`(?m)^>\s?`)
-	reHR         = regexp.MustCompile(`(?m)^[-*_]{3,}\s*$`)
-	reUL         = regexp.MustCompile(`(?m)^(\s*)[-*+]\s+`)
-	reBlankLines = regexp.MustCompile(`\n{3,}`)
+	reCodeBlock      = regexp.MustCompile("(?s)```[^\n]*\n?(.*?)```")
+	reInlineCode     = regexp.MustCompile("`([^`]+)`")
+	reImage          = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]*)\)`)
+	reLink           = regexp.MustCompile(`\[([^\]]+)\]\(([^)]*)\)`)
+	reTableSep       = regexp.MustCompile(`(?m)^\|[\s:|\-]+\|$`)
+	reTableRow       = regexp.MustCompile(`(?m)^\|(.+)\|$`)
+	reHeader         = regexp.MustCompile(`(?m)^#{1,6}\s+`)
+	reBoldAsterisk   = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	reBoldUnderscore = regexp.MustCompile(`(^|[^\p{L}\p{N}_/])__(.+?)__($|[^\p{L}\p{N}_/])`)
+	reStrike         = regexp.MustCompile(`~~(.+?)~~`)
+	reBlockquote     = regexp.MustCompile(`(?m)^>\s?`)
+	reHR             = regexp.MustCompile(`(?m)^[-*_]{3,}\s*$`)
+	reUL             = regexp.MustCompile(`(?m)^(\s*)[-*+]\s+`)
+	reBlankLines     = regexp.MustCompile(`\n{3,}`)
 )
 
 // MarkdownToPlainText 将 markdown 转成适合微信展示的纯文本。
@@ -29,6 +30,13 @@ func MarkdownToPlainText(text string) string {
 		parts := reCodeBlock.FindStringSubmatch(match)
 		if len(parts) > 1 {
 			return protected.put(strings.TrimSpace(parts[1]))
+		}
+		return match
+	})
+	result = reInlineCode.ReplaceAllStringFunc(result, func(match string) string {
+		parts := reInlineCode.FindStringSubmatch(match)
+		if len(parts) > 1 {
+			return protected.put(parts[1])
 		}
 		return match
 	})
@@ -53,24 +61,12 @@ func MarkdownToPlainText(text string) string {
 		return strings.Join(cells, "  ")
 	})
 	result = reHeader.ReplaceAllString(result, "")
-	result = reBold.ReplaceAllStringFunc(result, func(match string) string {
-		parts := reBold.FindStringSubmatch(match)
-		if parts[1] != "" {
-			return parts[1]
-		}
-		return parts[2]
-	})
+	result = reBoldAsterisk.ReplaceAllString(result, "$1")
+	result = reBoldUnderscore.ReplaceAllString(result, "$1$2$3")
 	result = reStrike.ReplaceAllString(result, "$1")
 	result = reBlockquote.ReplaceAllString(result, "")
 	result = reHR.ReplaceAllString(result, "")
 	result = reUL.ReplaceAllString(result, "${1}• ")
-	result = reInlineCode.ReplaceAllStringFunc(result, func(match string) string {
-		parts := reInlineCode.FindStringSubmatch(match)
-		if len(parts) > 1 {
-			return protected.put(parts[1])
-		}
-		return match
-	})
 	result = reBlankLines.ReplaceAllString(result, "\n\n")
 	result = strings.TrimSpace(result)
 	return protected.restore(result)

@@ -411,7 +411,7 @@ func (t *activeAgentTask) attachProgressSession(progress *progressSession) {
 	t.mu.Lock()
 	if t.phase != codexTaskTerminal && !t.view.closed {
 		t.progress = progress
-		progress.deliveryGuard = t.terminalDeliveryGuard
+		progress.setDeliveryGuardOnly(t.terminalDeliveryGuard)
 	}
 	t.mu.Unlock()
 }

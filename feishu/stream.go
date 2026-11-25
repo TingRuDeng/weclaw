@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	cardkitThrottle              = 500 * time.Millisecond
-	feishuCardJSONSoftLimitBytes = 2_800_000
+	cardkitThrottle                = 500 * time.Millisecond
+	feishuPresentationFlushTimeout = 10 * time.Second
+	feishuCardJSONSoftLimitBytes   = 28 * 1024
 )
 
 type feishuStream struct {
@@ -141,7 +142,9 @@ func (s *feishuStream) flushPresentation() {
 	s.pendingPresentationCtx = nil
 	s.presentationTimer = nil
 	s.mu.Unlock()
-	if err := s.updatePresentationNow(ctx, p); err != nil {
+	flushCtx, cancel := context.WithTimeout(ctx, feishuPresentationFlushTimeout)
+	defer cancel()
+	if err := s.updatePresentationNow(flushCtx, p); err != nil {
 		log.Printf("[feishu] failed to flush presentation: %v", err)
 	}
 }

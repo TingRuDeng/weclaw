@@ -366,6 +366,39 @@ func TestACPReadLoopMarksInputDeliveryUnknownOnCleanExit(t *testing.T) {
 	}
 }
 
+func TestACPFailRuntimeWaitersUncertainMarksInputDeliveryUnknown(t *testing.T) {
+	tests := []struct {
+		method      string
+		wantUnknown bool
+	}{
+		{method: "turn/start", wantUnknown: true},
+		{method: "turn/steer", wantUnknown: true},
+		{method: "thread/read", wantUnknown: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+			writer := &signalingACPWriteCloser{written: make(chan struct{})}
+			a.stdin = writer
+			done := make(chan error, 1)
+			go func() {
+				_, _, err := a.callWithSequence(context.Background(), tt.method, map[string]interface{}{"threadId": "thread-1"})
+				done <- err
+			}()
+			select {
+			case <-writer.written:
+			case <-time.After(time.Second):
+				t.Fatalf("%s request was not written", tt.method)
+			}
+			a.failRuntimeWaitersUncertain("shared app-server connection lost")
+			err := <-done
+			if got := errors.Is(err, ErrCodexInputDeliveryUnknown); got != tt.wantUnknown {
+				t.Fatalf("method=%s err=%v, wantUnknown=%v", tt.method, err, tt.wantUnknown)
+			}
+		})
+	}
+}
+
 func TestFormatRPCErrorMessageUsesStructuredData(t *testing.T) {
 	err := &rpcError{
 		Code:    -32000,

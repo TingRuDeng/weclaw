@@ -37,6 +37,7 @@ func TestSlashCommandPreservesPathsAndAliases(t *testing.T) {
 			h.customAliases = map[string]string{"ai": "mock"}
 			reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 			h.handleMessageForTest(context.Background(), platform.IncomingMessage{Platform: platform.PlatformWeChat, UserID: "user", Text: input}, reply)
+			waitForHandlerTasksIdle(t, h)
 			if !ag.wasChatCalled() || strings.Contains(strings.Join(reply.Texts, ""), "命令不存在") {
 				t.Fatalf("called=%v replies=%v", ag.wasChatCalled(), reply.Texts)
 			}

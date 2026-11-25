@@ -48,6 +48,7 @@ func TestHandleMessageRecordsOneTraceAcrossTaskProgressAndTerminal(t *testing.T)
 		Platform: platform.PlatformFeishu, AccountID: "app-1", UserID: "user-1",
 		ChatID: "chat-1", MessageID: "message-1", Text: "运行任务",
 	}, reply)
+	waitForHandlerTasksIdle(t, h)
 
 	events := capture.snapshot()
 	wantStages := []string{"message.received", "message.accepted", "agent.dispatched", "task.started", "task.progress", "task.completed"}

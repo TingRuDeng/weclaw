@@ -128,6 +128,7 @@ func TestSendToNamedAgentNativeStreamConsumesFinalReply(t *testing.T) {
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
+	waitForHandlerTasksIdle(t, h)
 
 	if reply.Stream.Completed != "[mock] 最终结果" {
 		t.Fatalf("completed=%q, want final reply in stream", reply.Stream.Completed)
@@ -148,6 +149,7 @@ func TestSendToNamedAgentNativeStreamCompletesCardWithoutSuccessNotice(t *testin
 		Text: true, Streaming: true, StreamCompletionNotification: true,
 	})
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
+	waitForHandlerTasksIdle(t, h)
 
 	if reply.Stream.Completed != "[mock] 最终结果" {
 		t.Fatalf("completed = %q", reply.Stream.Completed)
@@ -212,6 +214,7 @@ func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
+	waitForHandlerTasksIdle(t, h)
 
 	if reply.Stream.Completed != "[mock] 过程片段" {
 		t.Fatalf("completed=%q, want terminal card to retain the Agent progress reply", reply.Stream.Completed)
@@ -233,6 +236,7 @@ func TestFinalReplyOutsideStreamFailureDoesNotExposeStatusSentinel(t *testing.T)
 	})
 
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "ou_user", routeUserID: "ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
+	waitForHandlerTasksIdle(t, h)
 
 	if reply.Stream.Failed != "" {
 		t.Fatalf("failed card=%q，want compact status-only terminal", reply.Stream.Failed)
@@ -263,6 +267,7 @@ func TestNativeStreamProgressCollapsesRepeatedStructuredStatus(t *testing.T) {
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
+	waitForHandlerTasksIdle(t, h)
 
 	if len(reply.Stream.Updates) == 0 {
 		t.Fatal("stream should receive progress updates")
@@ -528,6 +533,7 @@ func TestStructuredAgentNativeStreamBuildsCompactTimeline(t *testing.T) {
 		userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply,
 		name: "mock", message: "检查进度", clientID: "client-1",
 	})
+	waitForHandlerTasksIdle(t, h)
 
 	if len(reply.Stream.Updates) == 0 {
 		t.Fatal("structured task should update the native stream")

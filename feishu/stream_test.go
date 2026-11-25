@@ -560,6 +560,57 @@ func TestFeishuPresentationFlushUsesOriginalContext(t *testing.T) {
 	}
 }
 
+type presentationDeadlineCardKitClient struct {
+	fakeCardKitClient
+	deadlineCh chan time.Time
+	hasDLCh    chan bool
+}
+
+func (c *presentationDeadlineCardKitClient) UpdateCard(ctx context.Context, cardID string, cardJSON string, sequence int) error {
+	dl, ok := ctx.Deadline()
+	c.hasDLCh <- ok
+	c.deadlineCh <- dl
+	return nil
+}
+
+func TestFeishuPresentationFlushEnforcesBoundedDeadline(t *testing.T) {
+	kit := &presentationDeadlineCardKitClient{
+		deadlineCh: make(chan time.Time, 1),
+		hasDLCh:    make(chan bool, 1),
+	}
+	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	stream := &feishuStream{cardKit: kit, cardID: "card-1", throttle: time.Hour, now: func() time.Time { return now }, lastUpdate: now}
+	if err := stream.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "queued", Details: "details"}); err != nil {
+		t.Fatalf("UpdatePresentation error: %v", err)
+	}
+	stream.flushPresentation()
+	select {
+	case hasDeadline := <-kit.hasDLCh:
+		if !hasDeadline {
+			t.Fatal("flushPresentation 必须设置有限超时上下文，防止后台刷新无限挂起")
+		}
+		dl := <-kit.deadlineCh
+		if remaining := time.Until(dl); remaining <= 0 || remaining > feishuPresentationFlushTimeout+time.Second {
+			t.Fatalf("flush deadline remaining=%s, want within (0, %s]", remaining, feishuPresentationFlushTimeout)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("presentation flush did not call CardKit")
+	}
+}
+
+func TestFeishuCardSoftLimitTriggersUnder30KB(t *testing.T) {
+	if feishuCardJSONSoftLimitBytes != 28*1024 {
+		t.Fatalf("feishuCardJSONSoftLimitBytes=%d, want %d", feishuCardJSONSoftLimitBytes, 28*1024)
+	}
+	stream := &feishuStream{cardKit: &fakeCardKitClient{}, cardID: "card-1", title: "Codex", sequence: 1, now: time.Now}
+	if err := stream.PreflightPresentation(platform.StreamPresentation{
+		Summary: "摘要",
+		Details: strings.Repeat("a", 29*1024),
+	}); !errors.Is(err, platform.ErrStreamContentTooLarge) {
+		t.Fatalf("29 KiB card preflight error=%v, want ErrStreamContentTooLarge", err)
+	}
+}
+
 func TestFeishuStreamUpdateDoesNotHoldStateLockDuringNetwork(t *testing.T) {
 	started := make(chan struct{}, 1)
 	block := make(chan struct{})
