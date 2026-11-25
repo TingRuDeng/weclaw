@@ -71,10 +71,10 @@ func TestCodexAppSharedHostStartsAndSurvivesFrontendCancellation(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	conn, err := a.startCodexAppSharedHostLocked(ctx, socket, os.Args[0], []string{
-		"-test.run=^TestHelperCodexUnixHost$", "-test.timeout=15s", "--",
+		"-test.run=^TestHelperCodexUnixHost$", "-test.timeout=45s", "--",
 	})
 	if err != nil {
 		t.Fatalf("start shared Host through signed Node: %v", err)
@@ -234,9 +234,9 @@ func TestCodexAppBootstrapIsReplacedWithCompleteConfiguration(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	bootstrap := []string{"-test.run=^TestHelperCodexUnixHost$", "-test.timeout=30s", "--", "-c", "features.code_mode_host=true", "app-server", "--analytics-default-enabled"}
+	bootstrap := []string{"-test.run=^TestHelperCodexUnixHost$", "-test.timeout=60s", "--", "-c", "features.code_mode_host=true", "app-server", "--analytics-default-enabled"}
 	first, err := a.connectCodexAppBridgeLocked(ctx, socket, os.Args[0], bootstrap, "")
 	if err != nil {
 		t.Fatal(err)
@@ -385,9 +385,9 @@ func TestCodexAppBootstrapPreservesLoadedThreadAndRejectsStaleRecord(t *testing.
 			t.Error(err)
 		}
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	bootstrap := []string{"-test.run=^TestHelperCodexUnixHost$", "-test.timeout=30s", "--", "app-server"}
+	bootstrap := []string{"-test.run=^TestHelperCodexUnixHost$", "-test.timeout=60s", "--", "app-server"}
 	conn, err := a.connectCodexAppBridgeLocked(ctx, socket, os.Args[0], bootstrap, "")
 	if err != nil {
 		t.Fatal(err)

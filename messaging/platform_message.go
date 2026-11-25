@@ -319,10 +319,18 @@ func (h *Handler) trySavePlatformURL(runtime platformMessageRuntime, trimmed str
 func (h *Handler) dispatchParsedAgentMessage(runtime platformMessageRuntime) {
 	agentNames, message := h.parseCommand(runtime.text)
 	if len(agentNames) == 0 {
+		if isFeishuPrivateMessage(runtime.msg, runtime.routeUserID) && h.hasAntigravityBinding(runtime.msg.AccountID, runtime.routeUserID) {
+			h.handleAntigravityMessage(runtime)
+			return
+		}
 		h.sendToDefaultAgent(runtime.agentRequest(runtime.text))
 		return
 	}
 	if message == "" {
+		knownNames := h.knownAgentNames(agentNames)
+		if len(knownNames) > 0 {
+			h.clearAntigravityBinding(runtime.msg.AccountID, runtime.routeUserID)
+		}
 		h.handleAgentSwitchMessage(runtime, agentNames)
 		return
 	}
@@ -331,6 +339,7 @@ func (h *Handler) dispatchParsedAgentMessage(runtime platformMessageRuntime) {
 		h.sendToDefaultAgent(runtime.agentRequest(runtime.text))
 		return
 	}
+	h.clearAntigravityBinding(runtime.msg.AccountID, runtime.routeUserID)
 	if len(knownNames) == 1 {
 		req := runtime.agentRequest(message)
 		req.name = knownNames[0]

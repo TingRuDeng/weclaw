@@ -30,7 +30,7 @@ func feishuHelpSection(command string, authorized bool) string {
 	}
 	section := strings.ToLower(fields[1])
 	switch section {
-	case "common", "codex", "claude", "settings":
+	case "common", "codex", "claude", "antigravity", "settings":
 		return section
 	case "manage":
 		if authorized {
@@ -46,11 +46,12 @@ func feishuHelpSection(command string, authorized bool) string {
 
 func feishuHelpPrompt(section string, authorized bool) string {
 	titles := map[string]string{
-		"common":   "常用与任务",
-		"codex":    "Codex",
-		"claude":   "Claude",
-		"settings": "设置与进度",
-		"manage":   "管理",
+		"common":      "常用与任务",
+		"codex":       "Codex",
+		"claude":      "Claude",
+		"antigravity": "Antigravity",
+		"settings":    "设置与进度",
+		"manage":      "管理",
 	}
 	if title := titles[section]; title != "" {
 		return "WeClaw 帮助 · " + title + "\n请选择命令，点击后会直接执行。"
@@ -99,6 +100,14 @@ func feishuHelpChoices(section string, authorized bool) []platform.Choice {
 			{ID: "/cc rename", Label: "重命名会话"},
 			{ID: "/cc help", Label: "完整命令"},
 		}
+	case "antigravity":
+		choices = []platform.Choice{
+			{ID: "/ag ls", Label: "桌面会话与项目"},
+			{ID: "/ag status", Label: "绑定与观察状态"},
+			{ID: "/ag new", Label: "新建会话（需附内容）"},
+			{ID: "/ag release", Label: "解除当前窗口绑定"},
+			{ID: "/ag help", Label: "完整命令"},
+		}
 	case "settings":
 		choices = []platform.Choice{
 			{ID: "/model", Label: "模型（当前/默认）"},
@@ -126,6 +135,7 @@ func feishuHelpChoices(section string, authorized bool) []platform.Choice {
 			{ID: "/help common", Label: "常用与任务"},
 			{ID: "/help codex", Label: "Codex"},
 			{ID: "/help claude", Label: "Claude"},
+			{ID: "/help antigravity", Label: "Antigravity"},
 			{ID: "/help settings", Label: "设置与进度"},
 		}
 		if authorized {

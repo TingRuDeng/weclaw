@@ -45,6 +45,8 @@ func (h *Handler) routeServicePlatformCommand(ctx context.Context, req platformC
 		h.handleServiceAdminCommand(ctx, msg, routeUserID, req.Trimmed, req.Reply)
 	case isFeishuIdentityCommand(req.Trimmed):
 		replyPlatformCommand(ctx, req, h.handleFeishuIdentityCommand(msg, req.Trimmed))
+	case isAntigravityCommand(req.Trimmed):
+		return h.handleAntigravityCommand(ctx, msg, routeUserID, req.Reply, req.Trimmed)
 	case req.Trimmed == "/status":
 		replyPlatformCommand(ctx, req, h.buildStatusForRoute(msg.UserID, routeUserID, msg.Platform, msg.AccountID))
 	case req.Trimmed == "/help" || strings.HasPrefix(req.Trimmed, "/help "):
@@ -80,8 +82,10 @@ func (h *Handler) routeSessionPlatformCommand(ctx context.Context, req platformC
 		}
 		replyPlatformCommand(ctx, req, h.handleProgressCommandForAccount(req.Trimmed, msg.Platform, msg.AccountID))
 	case isClaudeSessionCommand(req.Trimmed):
+		h.clearAntigravityBinding(msg.AccountID, routeUserID)
 		return h.handleClaudeSessionPlatformCommand(ctx, req, routeUserID)
 	case isCodexSessionCommand(req.Trimmed):
+		h.clearAntigravityBinding(msg.AccountID, routeUserID)
 		return h.handleCodexSessionPlatformCommand(ctx, req, routeUserID)
 	case isModelSettingCommand(req.Trimmed):
 		return h.handleModelSettingPlatformCommand(ctx, req)

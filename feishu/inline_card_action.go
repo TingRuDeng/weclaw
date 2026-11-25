@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -311,6 +312,17 @@ func isInlineCardCommand(choice string) bool {
 		case "help", "ls", "cd", "page", "status", "whoami", "pwd", "model", "quota", "switch", "account":
 			return true
 		}
+	case "/ag":
+		if len(fields) == 1 {
+			return true
+		}
+		switch fields[1] {
+		case "ls", "project", "page", "switch", "status", "release", "help", "new", "new-select":
+			return true
+		}
+		if _, err := strconv.Atoi(fields[1]); err == nil {
+			return true
+		}
 	}
 	return false
 }
@@ -320,7 +332,18 @@ func isDeferredCardResultCommand(choice string) bool {
 		return true
 	}
 	fields := strings.Fields(strings.ToLower(strings.TrimSpace(choice)))
-	if len(fields) < 2 || (fields[0] != "/cx" && fields[0] != "/cc") {
+	if len(fields) < 2 {
+		return false
+	}
+	if fields[0] == "/ag" {
+		switch fields[1] {
+		case "switch", "new", "new-select":
+			return true
+		}
+		_, err := strconv.Atoi(fields[1])
+		return err == nil
+	}
+	if fields[0] != "/cx" && fields[0] != "/cc" {
 		return false
 	}
 	if fields[1] == "switch" {
@@ -344,6 +367,12 @@ func deferredCardResultTitle(choice string) string {
 		return "任务操作结果"
 	}
 	fields := strings.Fields(strings.ToLower(strings.TrimSpace(choice)))
+	if len(fields) >= 2 && fields[0] == "/ag" {
+		if fields[1] == "new" || fields[1] == "new-select" {
+			return "Antigravity 新建结果"
+		}
+		return "Antigravity 会话切换结果"
+	}
 	if len(fields) >= 3 && fields[0] == "/cx" && fields[1] == "account" && fields[2] == "confirm" {
 		return "Codex 账号切换结果"
 	}
@@ -353,6 +382,9 @@ func deferredCardResultTitle(choice string) string {
 func deferredCardTimeoutText(choice string) string {
 	if isTaskControlCommand(choice) {
 		return "任务操作等待超时，请发送 /ps 检查当前状态后再操作。"
+	}
+	if fields := strings.Fields(strings.ToLower(strings.TrimSpace(choice))); len(fields) >= 2 && fields[0] == "/ag" {
+		return "Antigravity 操作等待超时，请发送 /ag status 检查当前绑定与观察状态后重试。"
 	}
 	if deferredCardResultTitle(choice) == "Codex 账号切换结果" {
 		return "Codex 账号切换等待超时，请发送 /cx account status 检查当前状态，确认后再重试。"

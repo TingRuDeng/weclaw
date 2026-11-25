@@ -117,6 +117,17 @@ type Handler struct {
 	lastTraceErrorAt        time.Time
 	auditErrorMu            sync.Mutex
 	lastAuditErrorAt        time.Time
+	// antigravityDeliveryMu 线性化观察器投递与解绑/切换/撤权。
+	// 解绑或切换返回后，旧观察器不得再发出进度或结果。
+	antigravityDeliveryMu sync.RWMutex
+	// antigravityMu 保护 /ag 内存绑定、单调 generation 与待提交正文缓存。
+	// 锁顺序固定为 antigravityMu -> h.mu，持有 antigravityMu 时不调用观察器。
+	antigravityMu          sync.Mutex
+	antigravityClient      AntigravityClient
+	antigravityBindings    map[string]*antigravityBinding
+	antigravityGenerations map[string]uint64
+	antigravityPending     map[string]antigravityPendingNew
+	antigravityNav         map[string]antigravityNavigationView
 }
 
 // SetPlatformRegistry 绑定运行中的账号级访问控制注册表，供远程授权变更立即生效。

@@ -47,6 +47,14 @@ Codex：
 
 /cx rename current|<编号> <名称> 重命名会话
 
+Antigravity（/ag，仅飞书私聊）：
+
+/ag ls 查看桌面会话
+
+/ag status 查看绑定、桌面状态与飞书观察
+
+/ag release 解除当前窗口绑定
+
 Claude：
 
 /cc ls 查看列表（编号从 1 开始）

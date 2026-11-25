@@ -36,7 +36,7 @@ ai_summary:
 - `cmd/`：CLI 命令、启动、停止、更新、重启保护和发布相关入口；更新后重启与手动重启必须在停止旧服务前复用启动预检。普通 native restart 只排空本地任务，不要求 App 退出或停止外部 daemon；以下 Host 轮换逻辑只用于显式旧模式。命令行只提供 `--force` 作为中断本地任务、退出 App 和停止 Host 的显式授权参数。普通重启遇到 ACP 客户端断线时，只重新连接已有 shared Host，并用完整 `thread/list` 权威快照复核全局空闲；metadata 声称 running 但 PID 已不存在时，只有 socket 无监听者且进程表确认没有替代 Host，才在 lifecycle lock 内标记 stopped 并删除陈旧 socket。Desktop/unknown/conflict、writer lease、真实 active 和其他重连失败仍阻断普通 Host 事务。显式 `restart --force`、`stop --force` 与 `update --restart --force` 代表操作者接受本地任务中断：先退出 Codex App，再根据实时进程快照停止当前用户的实际 Codex `app-server` 进程组，即使管理身份不完整；未知 Host 必须由 app-server 领衔独立进程组，不能与 shell 或其他程序共享 PGID。首次信号前重读原始 argv 并复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份。只有旧 PID、进程表/参数不可读或身份漂移时仍失败关闭。Host 停止已经尝试但结果未知时不启动第二个 Host；服务保持不可写后再次显式 `--force` 必须重新扫描并收敛，不能把旧事务缓存当作成功。WeClaw 未运行时同样通过 Agent 的离线受控入口执行这套强制终止，不按进程名清理、不删除 lock/journal/Codex 数据目录。
 - `config/`：配置结构、默认值、Agent 探测、工作目录白名单、平台/机器人用户白名单与旧配置兼容告警和 API 安全校验。
 - `agent/`：统一 Agent 接口与各类 runtime；`codexauth/`：按 shared-host namespace 隔离的 OAuth profile、系统凭据库/显式文件后端、安全文件与跨进程事务锁。
-- `platform/` 提供跨平台消息与回复抽象；`messaging/` 负责命令、会话、审批、结构化进展、任务状态、终态 outbox 和 Agent 调用。
+- `platform/` 提供跨平台消息与回复抽象；`messaging/` 负责命令、会话、审批、结构化进展、任务状态、终态 outbox 和 Agent 调用。`internal/antigravity/` 提供 Antigravity Sidecar 服务端、私有 Unix socket 客户端、官方 ConversationService/agentapi 适配与 `transcript.jsonl` 增量解析；`weclaw ag-sidecar` 以 `0700/0600` 状态目录和单实例 socket 运行，`/ag` 只在飞书私聊内存绑定桌面会话，飞书与桌面后续回合都通过 1s/3s 短轮询同步，显式 `/cx`、`/cc`、已知 Agent 前缀或 `/ag release` 立即解除绑定并静音旧观察器。
 - `observability/`：端到端 Trace 上下文、固定字段事件、轮转 JSONL 存储、受保护查询和 Codex 线协议脱敏录制。
 - `feishu/` 负责飞书事件与交互；`wechat/`、`ilink/` 负责微信个人号接入、replier、token 和 monitor。
 - `api/` 提供本机 HTTP API；`web/` 提供配置界面；`docs/`、`tasks/` 保存上下文、当前任务和长期 lessons。
