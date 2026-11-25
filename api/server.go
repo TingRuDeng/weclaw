@@ -29,7 +29,6 @@ const (
 type Server struct {
 	registry *platform.Registry
 	status   RuntimeStatusProvider
-	drain    RuntimeDrainController
 	restart  RuntimeRestartController
 	accounts CodexAccountController
 	codexCLI CodexCLIHostController
@@ -43,12 +42,6 @@ type Server struct {
 // RuntimeStatusProvider 暴露服务进程内的轻量运行态，供本机 CLI 做重启保护。
 type RuntimeStatusProvider interface {
 	ActiveTaskCount() int
-}
-
-// RuntimeDrainController 在本机重启前原子停止任务接纳并排空活动任务。
-type RuntimeDrainController interface {
-	Drain(context.Context, bool) (messaging.RuntimeDrainResult, error)
-	CancelDrain()
 }
 
 // RuntimeRestartController owns the stronger service-plus-Codex restart
@@ -110,13 +103,6 @@ func WithRuntimeStatusProvider(provider RuntimeStatusProvider) Option {
 	}
 }
 
-// WithRuntimeDrainController 配置只允许本机调用的安全重启排空入口。
-func WithRuntimeDrainController(controller RuntimeDrainController) Option {
-	return func(s *Server) {
-		s.drain = controller
-	}
-}
-
 // WithRuntimeRestartController configures the loopback-only coordinated
 // service and Codex Host restart entrypoint.
 func WithRuntimeRestartController(controller RuntimeRestartController) Option {
@@ -174,7 +160,6 @@ func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/send", s.handleSend)
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
-	mux.HandleFunc("/api/runtime/drain", s.handleRuntimeDrain)
 	mux.HandleFunc("/api/runtime/restart/prepare", s.handleRuntimeRestart)
 	mux.HandleFunc("/api/traces", s.handleTraceQuery)
 	mux.HandleFunc("/api/terminal-outbox", s.handleTerminalOutboxStatus)
@@ -299,52 +284,6 @@ func (s *Server) handleRuntimeRestart(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runtimeRestartDraining() bool {
 	provider, ok := s.restart.(interface{ IsDraining() bool })
 	return ok && provider.IsDraining()
-}
-
-func (s *Server) handleRuntimeDrain(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
-		http.Error(w, "POST or DELETE only", http.StatusMethodNotAllowed)
-		return
-	}
-	if !s.authorizeLocalControl(w, r) {
-		return
-	}
-	if s.drain == nil {
-		writeJSONError(w, http.StatusServiceUnavailable, "runtime_drain_unavailable", "安全重启排空入口不可用")
-		return
-	}
-	if r.Method == http.MethodDelete {
-		s.drain.CancelDrain()
-		writeJSONResponse(w, map[string]any{"status": "ok", "draining": false})
-		return
-	}
-	force := false
-	if raw := strings.TrimSpace(r.URL.Query().Get("force")); raw != "" {
-		parsed, err := strconv.ParseBool(raw)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid_force", "force 必须是布尔值")
-			return
-		}
-		force = parsed
-	}
-	drainCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	result, err := s.drain.Drain(drainCtx, force)
-	if errors.Is(err, messaging.ErrActiveTasksRunning) {
-		writeJSONStatus(w, http.StatusConflict, map[string]any{
-			"status": "busy", "draining": false,
-			"active_tasks": result.ActiveTasks, "remaining_tasks": result.RemainingTasks,
-		})
-		return
-	}
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "runtime_drain_failed", observability.SanitizeText(err.Error()))
-		return
-	}
-	writeJSONResponse(w, map[string]any{
-		"status": "ok", "draining": true,
-		"active_tasks": result.ActiveTasks, "remaining_tasks": result.RemainingTasks,
-	})
 }
 
 func newHTTPServer(addr string, handler http.Handler) *http.Server {

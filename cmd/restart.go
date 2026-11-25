@@ -47,7 +47,7 @@ type restartOps struct {
 	isSystemd      func() bool
 	restartSystemd func() error
 	cancelDrain    func(context.Context, *config.Config) error
-	forceLegacy    func(context.Context, *config.Config, error, func(bool) error) error
+	offlineForce   func(context.Context, *config.Config, func(bool) error) error
 	out            io.Writer
 }
 
@@ -64,7 +64,7 @@ func defaultRestartOps() restartOps {
 		isSystemd:      isSystemdManagedRuntime,
 		restartSystemd: restartSystemdService,
 		cancelDrain:    cancelRestartDrain,
-		forceLegacy:    forceLegacyRuntime,
+		offlineForce:   offlineForceRuntime,
 		out:            os.Stdout,
 	}
 }
@@ -86,17 +86,14 @@ func runRestart(ctx context.Context, force bool, ops restartOps) error {
 	}
 	if err := ops.ensureSafe(ctx, force, prepared.cfg); err != nil {
 		if errors.Is(err, errCoordinatedRestartUnsupported) {
-			if force && ops.forceLegacy != nil {
-				return ops.forceLegacy(ctx, prepared.cfg, err, start)
-			}
 			return err
 		}
 		return compensateRestartDrain(err, ops.cancelDrain, prepared.cfg)
 	}
 	running := ops.isRunning()
 	if !running {
-		if force && ops.forceLegacy != nil {
-			return ops.forceLegacy(ctx, prepared.cfg, nil, start)
+		if force && ops.offlineForce != nil {
+			return ops.offlineForce(ctx, prepared.cfg, start)
 		}
 		if requiresLegacyCodexRestartControl(prepared.cfg) && ops.acquireLease != nil {
 			lease, leaseErr := ops.acquireLease()
@@ -165,7 +162,7 @@ func requiresLegacyCodexRestartControl(cfg *config.Config) bool {
 
 func ensureOfflineCodexRestartSafe(cfg *config.Config, force bool) error {
 	if force {
-		return forceLegacyRuntimeWithLease(context.Background(), cfg, nil, nil, configuredLegacyCodexController, legacyServiceUsesSystemd)
+		return offlineForceRuntimeWithLease(context.Background(), cfg, nil, configuredOfflineCodexController)
 	}
 	if !requiresLegacyCodexRestartControl(cfg) {
 		return nil

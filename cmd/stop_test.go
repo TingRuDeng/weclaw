@@ -188,7 +188,7 @@ func TestRunStopRestoresHostWhenServiceStopFails(t *testing.T) {
 	}
 }
 
-func TestRunStopMigratesUnsupportedRuntimeAfterExplicitLegacyStop(t *testing.T) {
+func TestRunStopRefusesUnsupportedRuntimeWithoutCancel(t *testing.T) {
 	stopped := false
 	cancelled := false
 	err := runStop(context.Background(), stopOps{
@@ -198,10 +198,6 @@ func TestRunStopMigratesUnsupportedRuntimeAfterExplicitLegacyStop(t *testing.T) 
 		},
 		prepare: func(context.Context, bool, *config.Config) error {
 			return errCoordinatedRestartUnsupported
-		},
-		legacyStop: func(context.Context, *config.Config, func() error) error {
-			stopped = true
-			return nil
 		},
 		stop: func() error {
 			stopped = true
@@ -214,23 +210,18 @@ func TestRunStopMigratesUnsupportedRuntimeAfterExplicitLegacyStop(t *testing.T) 
 		out: &bytes.Buffer{},
 	})
 
-	if err != nil || !stopped || cancelled {
+	if !errors.Is(err, errCoordinatedRestartUnsupported) || stopped || cancelled {
 		t.Fatalf("error=%v stopped=%v cancelled=%v", err, stopped, cancelled)
 	}
 }
 
 func TestRunStopForceRefusesLegacyRuntimeWithoutCodexTransaction(t *testing.T) {
-	legacyStopped := false
 	serviceStopped := false
 	err := runStopWithOptions(context.Background(), true, stopOps{
 		isRunning:  func() bool { return true },
 		loadConfig: func() (*config.Config, error) { return config.DefaultConfig(), nil },
 		prepareWithOptions: func(context.Context, bool, bool, *config.Config) error {
 			return errCoordinatedRestartUnsupported
-		},
-		legacyStop: func(context.Context, *config.Config, func() error) error {
-			legacyStopped = true
-			return nil
 		},
 		stop: func() error {
 			serviceStopped = true
@@ -242,8 +233,8 @@ func TestRunStopForceRefusesLegacyRuntimeWithoutCodexTransaction(t *testing.T) {
 	if !errors.Is(err, errCoordinatedRestartUnsupported) {
 		t.Fatalf("error=%v, want unsupported coordinated force", err)
 	}
-	if legacyStopped || serviceStopped {
-		t.Fatalf("legacyStopped=%v serviceStopped=%v, force must not degrade to service-only stop", legacyStopped, serviceStopped)
+	if serviceStopped {
+		t.Fatalf("serviceStopped=%v, force must not degrade to service-only stop", serviceStopped)
 	}
 }
 

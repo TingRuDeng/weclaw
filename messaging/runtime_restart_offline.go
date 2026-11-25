@@ -12,8 +12,8 @@ import (
 // ErrOfflineRuntimeRestartIncomplete 表示已记录强制停止意图，不能恢复旧二进制绕过启动门禁。
 var ErrOfflineRuntimeRestartIncomplete = errors.New("离线强制重启未完成")
 
-// PrepareOfflineRuntimeRestart 用于没有协调接口的旧服务及离线重试。
-// 调用方必须持有 frontend/启动租约；stopRuntime 返回前必须确认旧服务退出并取得运行锁。
+// PrepareOfflineRuntimeRestart 用于服务未运行时的离线 --force 事务及失败重试。
+// 调用方必须持有 frontend/启动租约；ensureOffline 返回前必须取得运行锁确认服务未运行。
 // 在任何进程变更前记录 pending，失败时保留记录，只有完整停止后才允许启动恢复。
 func PrepareOfflineRuntimeRestart(ctx context.Context, stopRuntime func() error, controller codexRestartOptionsController, serviceManager string) (resultErr error) {
 	h := &Handler{}

@@ -38,8 +38,6 @@ type stopOps struct {
 	prepare            func(context.Context, bool, *config.Config) error
 	prepareWithOptions func(context.Context, bool, bool, *config.Config) error
 	stop               func() error
-	legacyStop         func(context.Context, *config.Config, func() error) error
-	forceLegacy        func(context.Context, *config.Config, error, func(bool) error) error
 	cancel             func(context.Context, *config.Config) error
 	acquireLease       func() (io.Closer, error)
 	offlineForce       func(*config.Config) error
@@ -54,10 +52,8 @@ func defaultStopOps() stopOps {
 		prepareWithOptions: func(ctx context.Context, forceDrain bool, forceTerminate bool, cfg *config.Config) error {
 			return beginRestartDrainWithControl(ctx, forceDrain, forceTerminate, cfg)
 		},
-		stop:        stopAllWeclaw,
-		legacyStop:  stopLegacyRuntime,
-		forceLegacy: forceLegacyRuntime,
-		cancel:      cancelRestartDrain,
+		stop:   stopAllWeclaw,
+		cancel: cancelRestartDrain,
 		acquireLease: func() (io.Closer, error) {
 			return agent.AcquireCodexRestartLease()
 		},
@@ -90,22 +86,7 @@ func runStopWithOptions(ctx context.Context, force bool, ops stopOps) error {
 		}
 		if err := prepare(ctx, true, cfg); err != nil {
 			if errors.Is(err, errCoordinatedRestartUnsupported) {
-				if force {
-					if ops.forceLegacy != nil {
-						if err := ops.forceLegacy(ctx, cfg, err, nil); err != nil {
-							return err
-						}
-						return writeStopConfirmation(ops.out)
-					}
-					return err
-				}
-				if ops.legacyStop == nil {
-					return err
-				}
-				if migrationErr := ops.legacyStop(ctx, cfg, ops.stop); migrationErr != nil {
-					return migrationErr
-				}
-				return writeStopConfirmation(ops.out)
+				return err
 			}
 			return compensateRestartDrain(err, ops.cancel, cfg)
 		}

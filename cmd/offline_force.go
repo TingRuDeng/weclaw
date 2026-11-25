@@ -12,11 +12,11 @@ import (
 	"github.com/fastclaw-ai/weclaw/messaging"
 )
 
-type legacyCodexController interface {
+type offlineCodexController interface {
 	PrepareCodexRestartWithOptions(context.Context, func(agent.CodexRestartSnapshot) error, agent.CodexRestartOptions) (agent.CodexRestartSnapshot, error)
 }
 
-func configuredLegacyCodexController(ctx context.Context, cfg *config.Config) (legacyCodexController, error) {
+func configuredOfflineCodexController(ctx context.Context, cfg *config.Config) (offlineCodexController, error) {
 	for _, candidate := range cfg.Agents {
 		if isCodexAppServerAgent(candidate) {
 			name, selected, err := configuredCodexAppServer(cfg)
@@ -37,20 +37,25 @@ func configuredLegacyCodexController(ctx context.Context, cfg *config.Config) (l
 	return nil, nil
 }
 
-// forceLegacyRuntime 由新 CLI 接管旧服务停止，旧服务不需要任何排空接口。
-// frontend 租约持续到新服务验证完成；运行锁只在旧服务退出后取得。
-func forceLegacyRuntime(ctx context.Context, cfg *config.Config, cause error, start func(bool) error) error {
+// offlineForceRuntime 在 WeClaw 服务未运行时接管离线强制停止与可选重启恢复。
+// frontend 租约持续到新服务验证完成；运行锁确保不会与并发启动的服务竞争。
+func offlineForceRuntime(ctx context.Context, cfg *config.Config, start func(bool) error) error {
 	lease, err := agent.AcquireCodexRestartLease()
 	if err != nil {
-		return fmt.Errorf("无法开始强制迁移，请先退出受控 weclaw codex cli: %w", err)
+		return fmt.Errorf("无法开始离线强制操作，请先退出受控 weclaw codex cli: %w", err)
 	}
 	defer lease.Close()
-	return forceLegacyRuntimeWithLease(ctx, cfg, cause, start, configuredLegacyCodexController, legacyServiceUsesSystemd)
+	return offlineForceRuntimeWithLease(ctx, cfg, start, configuredOfflineCodexController)
 }
 
-func forceLegacyRuntimeWithLease(ctx context.Context, cfg *config.Config, cause error, start func(bool) error, selectController func(context.Context, *config.Config) (legacyCodexController, error), inspectSystemd func(runtimeState, legacyProcessIdentity) (bool, error)) (resultErr error) {
+func offlineForceRuntimeWithLease(
+	ctx context.Context,
+	cfg *config.Config,
+	start func(bool) error,
+	selectController func(context.Context, *config.Config) (offlineCodexController, error),
+) (resultErr error) {
 	if cfg == nil {
-		return fmt.Errorf("强制迁移缺少配置")
+		return fmt.Errorf("离线强制操作缺少配置")
 	}
 	launchLock, err := acquireDaemonLaunchLock()
 	if err != nil {
@@ -66,17 +71,6 @@ func forceLegacyRuntimeWithLease(ctx context.Context, cfg *config.Config, cause 
 			_ = launch.Close()
 		}
 	}()
-	var target *legacyServiceTarget
-	if cause != nil {
-		var legacy *legacyRuntimeError
-		if !errors.As(cause, &legacy) {
-			return fmt.Errorf("强制迁移缺少旧服务身份快照: %w", cause)
-		}
-		target, err = captureLegacyService(legacy.state, inspectSystemd)
-		if err != nil {
-			return err
-		}
-	}
 	controller, err := selectController(ctx, cfg)
 	if err != nil {
 		return err
@@ -85,29 +79,21 @@ func forceLegacyRuntimeWithLease(ctx context.Context, cfg *config.Config, cause 
 	if err != nil {
 		return err
 	}
-	if target != nil && target.systemd {
-		manager = "systemd"
-	}
-	stopRuntime := func() error {
-		if target != nil {
-			if err := stopVerifiedLegacyService(ctx, *target); err != nil {
-				return err
-			}
-		}
+	ensureOffline := func() error {
 		lock, err := acquireRuntimeLock()
 		if err != nil {
-			return fmt.Errorf("无法确认旧服务已退出，尚未停止 Codex Host: %w", err)
+			return fmt.Errorf("无法确认服务已退出，尚未停止 Codex Host: %w", err)
 		}
 		runtime = lock
 		if controller == nil {
-			// 旧服务可能在首次只读扫描后才惰性创建 Host，必须在它退出后再次确认。
+			// 在取得运行锁后再次确认，防止并发退出前刚创建的 Host 被漏过。
 			if _, err := selectController(ctx, cfg); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	err = messaging.PrepareOfflineRuntimeRestart(ctx, stopRuntime, controller, manager)
+	err = messaging.PrepareOfflineRuntimeRestart(ctx, ensureOffline, controller, manager)
 	if err != nil {
 		return err
 	}

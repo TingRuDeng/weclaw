@@ -145,158 +145,17 @@ func TestBeginRestartDrainReportsLegacyRuntimeMigration(t *testing.T) {
 
 	err := beginRestartDrainWithConfig(context.Background(), false, cfg)
 
-	if err == nil {
-		t.Fatal("beginRestartDrainWithConfig error=nil, want legacy migration guidance")
+	if !errors.Is(err, errCoordinatedRestartUnsupported) {
+		t.Fatalf("error=%v, want errCoordinatedRestartUnsupported", err)
 	}
 	message := err.Error()
 	if strings.Contains(message, "cannot unmarshal number") {
 		t.Fatalf("error=%v, plain-text 404 must not be decoded as a JSON number", err)
 	}
-	for _, want := range []string{"v0.1.267", "未停止任何进程", "weclaw restart --force", "中断任务"} {
+	for _, want := range []string{"v0.1.267", "未停止任何进程", "手动停止旧版 WeClaw 服务"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("error=%v, want %q", err, want)
 		}
-	}
-}
-
-func TestStopLegacyRuntimeRequiresNoActiveTasks(t *testing.T) {
-	t.Setenv("WECLAW_HOME", t.TempDir())
-	activeTasks := 1
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/runtime/drain" {
-			t.Fatalf("path=%s, want runtime drain", r.URL.Path)
-		}
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "busy", ActiveTasks: activeTasks, RemainingTasks: activeTasks, Message: "旧版服务仍有 1 个运行中的任务"})
-	}))
-	defer server.Close()
-	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw", Version: "v0.1.267"}); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.DefaultConfig()
-	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
-	stopped := false
-	err := stopLegacyRuntime(context.Background(), cfg, func() error {
-		stopped = true
-		return nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "1 个运行中的任务") || stopped {
-		t.Fatalf("error=%v stopped=%v, want migration blocked before process stop", err, stopped)
-	}
-}
-
-func TestStopLegacyRuntimeStopsOnlyAfterIdleStatus(t *testing.T) {
-	t.Setenv("WECLAW_HOME", t.TempDir())
-	activeTasks := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/runtime/drain" {
-			t.Fatalf("request=%s %s, want runtime drain POST", r.Method, r.URL.Path)
-		}
-		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: true, ActiveTasks: activeTasks, RemainingTasks: 0})
-	}))
-	defer server.Close()
-	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw", Version: "v0.1.267"}); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.DefaultConfig()
-	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
-	stopped := false
-	if err := stopLegacyRuntime(context.Background(), cfg, func() error {
-		stopped = true
-		return nil
-	}); err != nil {
-		t.Fatalf("stopLegacyRuntime: %v", err)
-	}
-	if !stopped {
-		t.Fatal("idle legacy runtime should be stopped")
-	}
-}
-
-func TestStopLegacyRuntimeReportsAdmissionRecoveryFailure(t *testing.T) {
-	t.Setenv("WECLAW_HOME", t.TempDir())
-	var requests []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests = append(requests, r.Method+" "+r.URL.Path)
-		switch r.Method {
-		case http.MethodPost:
-			_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: true})
-		case http.MethodDelete:
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("recovery unavailable"))
-		default:
-			t.Fatalf("unexpected request=%s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw", Version: "v0.1.267"}); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.DefaultConfig()
-	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
-	stopErr := errors.New("service did not exit")
-	err := stopLegacyRuntime(context.Background(), cfg, func() error { return stopErr })
-	if !errors.Is(err, stopErr) || !strings.Contains(err.Error(), "恢复旧版服务排空失败") {
-		t.Fatalf("error=%v, want stop and admission recovery failures", err)
-	}
-	if got, want := strings.Join(requests, ","), "POST /api/runtime/drain,DELETE /api/runtime/drain"; got != want {
-		t.Fatalf("requests=%s, want %s", got, want)
-	}
-}
-
-func TestStopLegacyRuntimeHoldsCodexFrontendLeaseUntilStopReturns(t *testing.T) {
-	t.Setenv("WECLAW_HOME", t.TempDir())
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/runtime/drain" {
-			t.Fatalf("request=%s %s, want runtime drain", r.Method, r.URL.Path)
-		}
-		switch r.Method {
-		case http.MethodPost:
-			_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: true})
-		case http.MethodDelete:
-			_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: false})
-		default:
-			t.Fatalf("request=%s %s, want POST or DELETE", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw", Version: "v0.1.267"}); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.DefaultConfig()
-	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
-	stopErr := errors.New("service did not exit")
-	var stopLeaseErr error
-	err := stopLegacyRuntime(context.Background(), cfg, func() error {
-		_, stopLeaseErr = agent.AcquireCodexCLIFrontendLease()
-		return stopErr
-	})
-	if !errors.Is(err, stopErr) || !errors.Is(stopLeaseErr, agent.ErrCodexRestartInProgress) {
-		t.Fatalf("error=%v stopLeaseErr=%v, want restart lease held during stop", err, stopLeaseErr)
-	}
-	lease, err := agent.AcquireCodexCLIFrontendLease()
-	if err != nil {
-		t.Fatalf("frontend lease remained held after migration stop returned: %v", err)
-	}
-	_ = lease.Close()
-}
-
-func TestStopLegacyRuntimeRefusesWhenCodexCLIFrontendLeaseIsActive(t *testing.T) {
-	t.Setenv("WECLAW_HOME", t.TempDir())
-	activeLease, err := agent.AcquireCodexCLIFrontendLease()
-	if err != nil {
-		t.Fatalf("AcquireCodexCLIFrontendLease: %v", err)
-	}
-	defer activeLease.Close()
-	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw", Version: "v0.1.267"}); err != nil {
-		t.Fatal(err)
-	}
-	stopCalled := false
-	err = stopLegacyRuntime(context.Background(), config.DefaultConfig(), func() error {
-		stopCalled = true
-		return nil
-	})
-	if !errors.Is(err, agent.ErrCodexCLIFrontendActive) || stopCalled {
-		t.Fatalf("error=%v stopCalled=%v, want active CLI lease to block migration", err, stopCalled)
 	}
 }
 
