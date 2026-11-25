@@ -34,7 +34,7 @@ func (h *Handler) sendFeishuModeCard(ctx context.Context, req platformCommandReq
 		{ID: "/mode default", Label: markCurrentChoice("default · 每次按钮确认", !yolo)},
 		{ID: "/mode yolo", Label: markCurrentChoice("yolo · 自动同意审批", yolo)},
 	}
-	choices = platformChoicesWithMetadata(choices, feishuChoiceSessionMetadata(msg, routeUserID))
+	choices = platformChoicesWithRoute(choices, platformMessageChoiceRoute(msg, routeUserID))
 	prompt := "当前审批模式：" + current + "\n\n请选择 Agent 授权处理方式。群聊中的 yolo 只对当前操作者生效；它不改变全局 sandbox，Agent 的普通提问仍会显示选择卡片。"
 	if err := req.Reply.AskChoices(ctx, prompt, choices); err != nil {
 		log.Printf("[handler] failed to send feishu mode choices: %v", err)

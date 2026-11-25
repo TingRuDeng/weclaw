@@ -16,6 +16,7 @@ type externalCodexTaskOptions struct {
 	ctx                    context.Context
 	actorUserID            string
 	routeUserID            string
+	routeIsGroup           bool
 	agentName              string
 	agent                  agent.Agent
 	conversationID         string

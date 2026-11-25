@@ -254,7 +254,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
 	}
-	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
+	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey(testWeChatRoute, "codex"), workspace)
 	if thread != "thread-desktop" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-desktop false", thread, pending)
 	}
@@ -279,7 +279,7 @@ func TestHandleCodexSwitchRuntimeFailureKeepsPreviousSelection(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	h.ensureCodexSessions().setThread(bindingKey, currentWorkspace, "thread-current")
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, currentWorkspace)
 
@@ -319,7 +319,7 @@ func TestCodexCxLsListsWorkspacesWithoutThreads(t *testing.T) {
 	h.agents["codex"] = ag
 	h.SetCodexLocalSessionDir(t.TempDir())
 	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	h.ensureCodexSessions().setThread(bindingKey, workspaceA, "thread-a")
 	h.ensureCodexSessions().setThread(bindingKey, workspaceB, "thread-b")
 	client, calls, closeServer := newRecordingILinkClient(t)

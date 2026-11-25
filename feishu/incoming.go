@@ -157,11 +157,11 @@ func (a *Adapter) toIncomingEnvelopeFromMessage(event *larkim.P2MessageReceiveV1
 	}
 	text, resources := feishuMessageTextAndResources(event, normalized)
 	sessionKey := BuildFeishuSessionKey(scope)
+	isGroup := isFeishuGroupChat(scope.ChatType)
 	metadata := map[string]string{
 		"raw_content_type":       normalized.RawContentType,
 		"original_user_id":       normalized.UserID,
 		"feishu_chat_type":       scope.ChatType,
-		feishuSessionMetadataKey: sessionKey,
 		feishuMentionMetadataKey: fmt.Sprintf("%t", scope.IsMentioned),
 	}
 	addMetadataIfNotEmpty(metadata, "feishu_open_id", scope.SenderOpenID)
@@ -173,7 +173,7 @@ func (a *Adapter) toIncomingEnvelopeFromMessage(event *larkim.P2MessageReceiveV1
 		UserID:       normalized.UserID,
 		UserAliases:  feishuUserAliases(scope),
 		ChatID:       normalized.ChatID,
-		Route:        platform.SessionRoute{Key: sessionKey},
+		Route:        platform.SessionRoute{Key: sessionKey, IsGroup: isGroup},
 		MessageID:    normalized.MessageID,
 		ContextToken: normalized.MessageID,
 		Text:         text,

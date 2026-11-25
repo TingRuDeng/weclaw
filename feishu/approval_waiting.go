@@ -3,7 +3,6 @@ package feishu
 import (
 	"context"
 	"log"
-	"strings"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 )
@@ -32,7 +31,7 @@ func (r *Replier) recordPrivateApprovalWaiting(ctx context.Context, choices []pl
 		return
 	}
 	choice := choices[0]
-	if !strings.Contains(choice.Metadata[feishuSessionMetadataKey], ":group:") || choice.Metadata["approval_key"] == "" {
+	if !choice.Route.IsGroup || choice.Metadata["approval_key"] == "" {
 		return
 	}
 	err := r.taskCards.withApprovalCardOperation(r.CurrentTaskCardID(), func(cardID string) error {

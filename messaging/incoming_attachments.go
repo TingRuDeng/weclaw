@@ -31,7 +31,7 @@ func firstAttachment(attachments []platform.Attachment, kind platform.Attachment
 }
 
 func (h *Handler) handleFileAttachment(ctx context.Context, userID string, reply platform.Replier, file platform.Attachment, text string) (string, bool) {
-	saved, err := h.saveIncomingAttachment(ctx, file)
+	saved, err := h.saveIncomingAttachment(file)
 	if err != nil {
 		log.Printf("[handler] failed to save incoming file from %s: %v", userID, err)
 		sendPlatformText(ctx, reply, userID, fmt.Sprintf("文件保存失败：%v", err))
@@ -42,7 +42,7 @@ func (h *Handler) handleFileAttachment(ctx context.Context, userID string, reply
 }
 
 func (h *Handler) handleImageAttachment(ctx context.Context, userID string, reply platform.Replier, image platform.Attachment, text string) (string, bool) {
-	saved, err := h.saveIncomingAttachment(ctx, image)
+	saved, err := h.saveIncomingAttachment(image)
 	if err != nil {
 		log.Printf("[handler] failed to save incoming image from %s: %v", userID, err)
 		sendPlatformText(ctx, reply, userID, fmt.Sprintf("图片保存失败：%v", err))
@@ -52,11 +52,11 @@ func (h *Handler) handleImageAttachment(ctx context.Context, userID string, repl
 	return buildImageAgentMessage(text, saved), true
 }
 
-func (h *Handler) saveIncomingAttachment(ctx context.Context, file platform.Attachment) (savedIncomingFile, error) {
+func (h *Handler) saveIncomingAttachment(file platform.Attachment) (savedIncomingFile, error) {
 	if file.Metadata["temporary"] == "true" && file.Path != "" {
 		defer os.Remove(file.Path)
 	}
-	data, err := h.readAttachmentData(ctx, file)
+	data, err := h.readAttachmentData(file)
 	if err != nil {
 		return savedIncomingFile{}, err
 	}
@@ -72,27 +72,14 @@ func (h *Handler) saveIncomingAttachment(ctx context.Context, file platform.Atta
 	return savedIncomingFile{name: fileName, path: path}, nil
 }
 
-func (h *Handler) readAttachmentData(ctx context.Context, attachment platform.Attachment) ([]byte, error) {
+func (h *Handler) readAttachmentData(attachment platform.Attachment) ([]byte, error) {
 	if attachment.Path != "" {
 		return readLocalAttachment(attachment.Path)
 	}
-	encryptQueryParam := attachment.Metadata["encrypt_query_param"]
-	aesKey := attachment.Metadata["aes_key"]
-	if encryptQueryParam == "" || aesKey == "" {
-		return nil, fmt.Errorf("文件缺少下载信息")
+	if downloadErr := strings.TrimSpace(attachment.Metadata["download_error"]); downloadErr != "" {
+		return nil, fmt.Errorf("%s", downloadErr)
 	}
-	downloader := h.cdnDownloader
-	if downloader == nil {
-		return nil, fmt.Errorf("平台未配置附件下载能力")
-	}
-	data, err := downloader(ctx, encryptQueryParam, aesKey)
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > maxIncomingAttachmentBytes {
-		return nil, fmt.Errorf("文件超过 %d MiB 限制", maxIncomingAttachmentBytes/(1024*1024))
-	}
-	return data, nil
+	return nil, fmt.Errorf("文件缺少下载信息")
 }
 
 func readLocalAttachment(path string) ([]byte, error) {
@@ -187,7 +174,7 @@ func (h *Handler) handleImageAttachmentSave(ctx context.Context, userID string, 
 	if img.SourceID != "" {
 		data, _, err = downloadFile(ctx, img.SourceID)
 	} else {
-		data, err = h.readAttachmentData(ctx, img)
+		data, err = h.readAttachmentData(img)
 	}
 	if err != nil {
 		log.Printf("[handler] failed to download image from %s: %v", userID, err)

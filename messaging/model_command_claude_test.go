@@ -101,8 +101,11 @@ func TestFeishuClaudeModelAndReasoningCommandsUseChoiceCards(t *testing.T) {
 func assertModelCardMetadata(t *testing.T, choices []platform.Choice, sessionKey string, agentName string) {
 	t.Helper()
 	for _, choice := range choices {
-		if choice.Metadata[feishuSessionMetadataKey] != sessionKey {
-			t.Fatalf("choice=%#v，期望保留飞书会话键 %q", choice, sessionKey)
+		if choice.Route.Key != sessionKey {
+			t.Fatalf("choice=%#v，期望保留飞书一等会话路由 %q", choice, sessionKey)
+		}
+		if _, duplicated := choice.Metadata[feishuSessionMetadataKey]; duplicated {
+			t.Fatalf("choice=%#v，不应再向 Metadata 双写 feishu_session_key", choice)
 		}
 		if choice.Metadata[modelSettingAgentMetadataKey] != agentName {
 			t.Fatalf("choice=%#v，期望保留目标 Agent %q", choice, agentName)

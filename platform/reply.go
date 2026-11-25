@@ -288,5 +288,6 @@ const (
 type Choice struct {
 	ID       string
 	Label    string
+	Route    SessionRoute
 	Metadata map[string]string
 }

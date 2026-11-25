@@ -171,7 +171,7 @@ func (h *Handler) createExternalCodexTaskReservationLocked(opts externalCodexTas
 	interactionLease := &agentInteractionLease{}
 	taskCtx, detachCodexObserver := agent.ContextWithCodexObserverDetach(context.Background())
 	taskCtx = h.withAgentInteractions(taskCtx, agentInteractionContextOptions{
-		actorUserID: opts.actorUserID, routeUserID: opts.routeUserID,
+		actorUserID: opts.actorUserID, routeUserID: opts.routeUserID, routeIsGroup: opts.routeIsGroup,
 		agentName: opts.agentName, reply: opts.reply, lease: interactionLease,
 	})
 	runtimeOwner, ownerRevision := externalCodexTaskOwner(prepared.state)

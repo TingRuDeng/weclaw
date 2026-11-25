@@ -181,8 +181,8 @@ func (h *Handler) sendFeishuModelSettingCard(ctx context.Context, req modelSetti
 			metadata[modelSettingClaudeSessionMetadataKey] = ref.sessionID
 		}
 	}
-	metadata = mergeChoiceMetadata(metadata, feishuChoiceSessionMetadata(req.message, req.route.routeUserID))
 	choices = platformChoicesWithMetadata(choices, metadata)
+	choices = platformChoicesWithRoute(choices, platformMessageChoiceRoute(req.message, req.route.routeUserID))
 	return req.reply.AskChoices(ctx, prompt, choices) == nil
 }
 

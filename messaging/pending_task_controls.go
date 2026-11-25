@@ -127,27 +127,27 @@ func (h *Handler) sendPendingTaskControlCard(notice agentTaskAdmissionNotice) bo
 	notice.task.mu.Unlock()
 
 	token := h.pendingTaskControls.issue(record)
+	route := choiceSessionRouteForInteraction(notice.routeUserID, notice.routeIsGroup)
 	metadata := map[string]string{
 		platform.ChoiceMetadataInteractionKind:  platform.ChoiceInteractionTaskControl,
 		platform.ChoiceMetadataAgentName:        agentDisplayName(notice.agentName),
 		platform.ChoiceMetadataTaskControlToken: token,
-		feishuSessionMetadataKey:                notice.routeUserID,
 	}
 	choices := make([]platform.Choice, 0, 3)
 	if notice.guideSupported {
 		choices = append(choices, platform.Choice{
-			ID: "/guide", Label: "作为引导发送", Metadata: metadata,
+			ID: "/guide", Label: "作为引导发送", Route: route, Metadata: metadata,
 		})
 	}
 	choices = append(choices,
 		platform.Choice{
-			ID: "/cancel", Label: "撤回暂存消息",
+			ID: "/cancel", Label: "撤回暂存消息", Route: route,
 			Metadata: mergeChoiceMetadata(metadata, map[string]string{
 				platform.ChoiceMetadataButtonType: platform.ChoiceButtonTypeDefault,
 			}),
 		},
 		platform.Choice{
-			ID: "/stop", Label: "停止当前任务",
+			ID: "/stop", Label: "停止当前任务", Route: route,
 			Metadata: mergeChoiceMetadata(metadata, map[string]string{
 				platform.ChoiceMetadataButtonType: platform.ChoiceButtonTypeDefault,
 			}),

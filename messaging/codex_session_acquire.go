@@ -26,6 +26,7 @@ type codexSessionAcquireRequest struct {
 	actorUserID        string
 	authorizedIdentity string
 	routeUserID        string
+	routeIsGroup       bool
 	agentName          string
 	agent              agent.Agent
 	route              codexConversationRoute
@@ -377,7 +378,7 @@ func externalCodexTaskOptionsFromAcquire(req codexSessionAcquireRequest) externa
 	}
 	return externalCodexTaskOptions{
 		ctx: taskContext, actorUserID: req.actorUserID,
-		routeUserID: req.routeUserID, agentName: req.agentName,
+		routeUserID: req.routeUserID, routeIsGroup: req.routeIsGroup, agentName: req.agentName,
 		agent: req.agent, conversationID: req.route.conversationID,
 		bindingKey: req.route.bindingKey,
 		threadID:   req.route.threadID, workspaceRoot: req.route.workspaceRoot, platform: req.platform,

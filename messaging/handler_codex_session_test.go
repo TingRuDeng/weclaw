@@ -58,7 +58,7 @@ func TestHandleCodexNewCreatesSelectsAndAcquiresThread(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-old")
 	ag.setThreadBinding("thread-old", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
 	ag.setThreadBinding("thread-new", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
@@ -68,12 +68,12 @@ func TestHandleCodexNewCreatesSelectsAndAcquiresThread(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(102, "/cx new"))
 
-	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	wantConversationID := buildCodexConversationID(testWeChatRoute, "codex", workspace)
 	_, resetConversation := ag.resetSnapshot()
 	if resetConversation != wantConversationID {
 		t.Fatalf("reset conversationID=%q, want %q", resetConversation, wantConversationID)
 	}
-	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
+	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey(testWeChatRoute, "codex"), workspace)
 	if thread != "thread-new" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-new false", thread, pending)
 	}
@@ -91,7 +91,7 @@ func TestHandleGlobalNewCreatesSelectsAndAcquiresCodexThread(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
 	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-old")
 	ag.setThreadBinding("thread-old", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
@@ -101,7 +101,7 @@ func TestHandleGlobalNewCreatesSelectsAndAcquiresCodexThread(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(123, "/new"))
 
-	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	wantConversationID := buildCodexConversationID(testWeChatRoute, "codex", workspace)
 	_, resetConversation := ag.resetSnapshot()
 	if resetConversation != wantConversationID {
 		t.Fatalf("reset conversation=%q, want %q", resetConversation, wantConversationID)
@@ -129,7 +129,7 @@ func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(103, "/cx switch thread-2"))
 
-	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
+	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey(testWeChatRoute, "codex"), workspace)
 	if thread != "thread-2" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-2 false", thread, pending)
 	}
@@ -146,14 +146,14 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
-	h.ensureCodexSessions().setThread(codexBindingKey("user-1", "codex"), targetWorkspace, "thread-target")
+	h.ensureCodexSessions().setThread(codexBindingKey(testWeChatRoute, "codex"), targetWorkspace, "thread-target")
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(106, "/cx switch thread-target"))
 
-	threadID, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), targetWorkspace)
+	threadID, pending := h.ensureCodexSessions().getThread(codexBindingKey(testWeChatRoute, "codex"), targetWorkspace)
 	if ag.useThreadID != "" || pending || threadID != "thread-target" {
 		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
@@ -177,7 +177,7 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	h.ensureCodexSessions().setThread(bindingKey, currentWorkspace, "thread-a")
 	h.ensureCodexSessions().setThread(bindingKey, targetWorkspace, "thread-b")
 

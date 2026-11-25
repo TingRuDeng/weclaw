@@ -288,6 +288,7 @@ func (h *Handler) dispatchCodexMutationCommand(runtime codexSessionCommandRuntim
 			ctx: runtime.ctx, taskContext: runtime.externalTaskCtx,
 			actorUserID: runtime.actorUserID, userID: runtime.routeUserID,
 			authorizedIdentity: runtime.req.AuthorizedIdentity,
+			routeIsGroup:       runtime.req.RouteIsGroup,
 			agentName:          runtime.agentName, workspaceRoot: runtime.workspaceRoot,
 			agent:    runtime.agent,
 			platform: runtime.req.Platform, accountID: runtime.req.AccountID,
@@ -314,7 +315,8 @@ func (h *Handler) dispatchCodexSwitchCommand(runtime codexSessionCommandRuntime)
 		workspaceRoot: runtime.workspaceRoot, agent: runtime.agent,
 		target: runtime.fields[2],
 		options: codexSwitchOptions{
-			actorUserID: runtime.actorUserID, authorizedIdentity: runtime.req.AuthorizedIdentity, platform: runtime.req.Platform,
+			actorUserID: runtime.actorUserID, authorizedIdentity: runtime.req.AuthorizedIdentity,
+			routeIsGroup: runtime.req.RouteIsGroup, platform: runtime.req.Platform,
 			accountID: runtime.req.AccountID, reply: runtime.req.Reply,
 			externalTaskCtx: runtime.externalTaskCtx,
 		},
@@ -326,6 +328,7 @@ func (h *Handler) dispatchCodexSwitchCommand(runtime codexSessionCommandRuntime)
 func (runtime codexSessionCommandRuntime) shortSelectionRequest() codexShortSelectionRequest {
 	return codexShortSelectionRequest{
 		UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID, AuthorizedIdentity: runtime.req.AuthorizedIdentity,
+		RouteIsGroup: runtime.req.RouteIsGroup,
 		AgentName: runtime.agentName, WorkspaceRoot: runtime.workspaceRoot,
 		Agent: runtime.agent, BindingKey: runtime.bindingKey, Target: runtime.fields[1],
 		Platform: runtime.req.Platform,
@@ -339,6 +342,7 @@ func (runtime codexSessionCommandRuntime) workspaceCdRequest(target string) code
 	return codexWorkspaceCdRequest{
 		Context: runtime.ctx, TaskContext: runtime.externalTaskCtx,
 		UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID, AuthorizedIdentity: runtime.req.AuthorizedIdentity,
+		RouteIsGroup: runtime.req.RouteIsGroup,
 		BindingKey: runtime.bindingKey,
 		AgentName: runtime.agentName, Target: target, Agent: runtime.agent,
 		Platform: runtime.req.Platform, AccountID: runtime.req.AccountID,

@@ -66,6 +66,7 @@ type codexFrontendFollower struct {
 	ActorUserID           string
 	AuthorizedIdentity    string
 	DeliveryRoute         platform.DeliveryRoute
+	RouteIsGroup          bool                                    `json:"RouteIsGroup,omitempty"`
 	RuntimeRecoveryResult *platform.DurableCommandResultReference `json:"RuntimeRecoveryResult,omitempty"`
 	UpdatedAt             string
 }
@@ -263,7 +264,7 @@ func codexRouteUserMatchesActor(routeUserID string, actorUserID string) bool {
 	routeUserID = strings.TrimSpace(routeUserID)
 	actorUserID = strings.TrimSpace(actorUserID)
 	return routeUserID != "" && actorUserID != "" &&
-		(routeUserID == actorUserID || routeUserID == normalizeConversationUserKey(actorUserID))
+		(routeUserID == actorUserID || routeUserID == normalizeConversationUserKey(actorUserID) || isWeChatUserRoute(routeUserID, actorUserID))
 }
 
 func (s *codexSessionStore) workspaceInUse(workspaceRoot string) bool {

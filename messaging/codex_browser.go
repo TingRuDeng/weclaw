@@ -21,6 +21,7 @@ type codexWorkspaceCdRequest struct {
 	UserID             string
 	ActorUserID        string
 	AuthorizedIdentity string
+	RouteIsGroup       bool
 	BindingKey         string
 	AgentName          string
 	Target             string
@@ -167,7 +168,9 @@ func (h *Handler) enterCodexWorkspaceWithSingleSessionResult(entry codexSingleSe
 		ctx: req.Context, taskContext: firstCodexContext(req.TaskContext, req.Context),
 		actorUserID:        firstNonBlank(req.ActorUserID, req.UserID),
 		authorizedIdentity: strings.TrimSpace(req.AuthorizedIdentity),
-		routeUserID:        req.UserID, agentName: req.AgentName, agent: req.Agent,
+		routeUserID:        req.UserID,
+		routeIsGroup:       req.RouteIsGroup || (req.Platform == platform.PlatformFeishu && isLegacyFeishuGroupRouteKey(req.UserID)),
+		agentName:          req.AgentName, agent: req.Agent,
 		route: route, platform: req.Platform, accountID: req.AccountID, reply: req.Reply,
 	})
 	if err != nil {

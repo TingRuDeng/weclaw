@@ -132,7 +132,7 @@ func TestCodexCxCdWorkspaceSkipsStoredArchivedThread(t *testing.T) {
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-archived")
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
@@ -165,7 +165,7 @@ func TestCodexCxCdWorkspaceClearsStaleStoredThread(t *testing.T) {
 			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
 		},
 	}
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-archived")
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()

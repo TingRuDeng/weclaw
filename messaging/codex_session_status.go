@@ -115,7 +115,7 @@ func (h *Handler) switchCodexWorkspaceForRoute(ownerUserID string, routeUserID s
 func shouldSyncCodexGlobalWorkspace(ownerUserID string, routeUserID string) bool {
 	ownerUserID = strings.TrimSpace(ownerUserID)
 	routeUserID = strings.TrimSpace(routeUserID)
-	return routeUserID == "" || routeUserID == ownerUserID
+	return routeUserID == "" || routeUserID == ownerUserID || isWeChatUserRoute(routeUserID, ownerUserID)
 }
 
 func (h *Handler) renderCodexWhoami(bindingKey string, workspaceRoot string) string {

@@ -29,13 +29,29 @@ func isWeClawEcho(botID string, msg ilink.WeixinMessage) bool {
 		strings.HasPrefix(text, "weclaw ")
 }
 
+// BuildWeixinSessionKey 为微信入站消息构造稳定的账号级会话路由，隔离多个微信账号的同用户会话。
+func BuildWeixinSessionKey(accountID string, userID string) string {
+	accountID = strings.TrimSpace(accountID)
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return ""
+	}
+	if accountID == "" {
+		return string(platform.PlatformWeChat) + ":" + userID
+	}
+	return string(platform.PlatformWeChat) + ":" + accountID + ":" + userID
+}
+
 // IncomingFromWeixin 将 iLink 消息转换成平台无关消息。
 func IncomingFromWeixin(msg ilink.WeixinMessage) platform.IncomingMessage {
+	accountID := strings.TrimSpace(msg.ToUserID)
+	userID := strings.TrimSpace(msg.FromUserID)
 	return platform.IncomingMessage{
 		Platform:     platform.PlatformWeChat,
-		AccountID:    strings.TrimSpace(msg.ToUserID),
-		UserID:       strings.TrimSpace(msg.FromUserID),
-		ChatID:       strings.TrimSpace(msg.FromUserID),
+		AccountID:    accountID,
+		UserID:       userID,
+		ChatID:       userID,
+		Route:        platform.SessionRoute{Key: BuildWeixinSessionKey(accountID, userID)},
 		MessageID:    strconv.FormatInt(msg.MessageID, 10),
 		Text:         weixinText(msg),
 		Attachments:  weixinAttachments(msg),

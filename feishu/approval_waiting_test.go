@@ -17,7 +17,7 @@ func TestPrivateApprovalWaitingLivesOnCurrentTaskCard(t *testing.T) {
 	for _, key := range []string{"a", "b"} {
 		choice := automaticApprovalChoiceForTest(key, "task")
 		choice.Metadata[approvalOwnerValueKey] = "ou_owner"
-		choice.Metadata[feishuSessionMetadataKey] = "feishu:test:group:oc_group"
+		choice.Route = platform.SessionRoute{Key: "feishu:test:group:oc_group", IsGroup: true}
 		if err := r.AskChoices(context.Background(), approvalPromptForTest("private-command"), []platform.Choice{choice}); err != nil {
 			t.Fatal(err)
 		}
@@ -88,5 +88,36 @@ func TestApprovalWaitingMovesOnlyAfterBindingCommit(t *testing.T) {
 	after, _ := r.taskCards.snapshot("candidate")
 	if after.WaitingApprovals != 1 || r.taskCards.approvalCardID("original") != "candidate" {
 		t.Fatal("committed binding did not move the pending approval")
+	}
+}
+
+func TestPrivateApprovalWaitingUsesStructuredGroupFlagNotSubstring(t *testing.T) {
+	kit := &fakeCardKitClient{cardIDs: []string{"task-dm", "panel-dm", "task-group", "panel-group"}}
+	dmReplier := newReplierWithTaskCards(&fakeMessageSender{}, "oc_other", kit, newTaskCardRegistry())
+	if _, err := dmReplier.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex"}); err != nil {
+		t.Fatal(err)
+	}
+	nonGroupChoice := automaticApprovalChoiceForTest("k1", "task-dm")
+	nonGroupChoice.Metadata[approvalOwnerValueKey] = "ou_owner"
+	nonGroupChoice.Route = platform.SessionRoute{Key: "feishu:test:group:fake-substring", IsGroup: false}
+	if err := dmReplier.AskChoices(context.Background(), approvalPromptForTest("cmd"), []platform.Choice{nonGroupChoice}); err != nil {
+		t.Fatal(err)
+	}
+	if opts, _ := dmReplier.taskCards.snapshot("task-dm"); opts.WaitingApprovals != 0 {
+		t.Fatalf("WaitingApprovals=%d, want 0 when Route.IsGroup is false", opts.WaitingApprovals)
+	}
+
+	groupReplier := newReplierWithTaskCards(&fakeMessageSender{}, "oc_chat", kit, newTaskCardRegistry())
+	if _, err := groupReplier.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex"}); err != nil {
+		t.Fatal(err)
+	}
+	groupChoice := automaticApprovalChoiceForTest("k2", "task-group")
+	groupChoice.Metadata[approvalOwnerValueKey] = "ou_owner"
+	groupChoice.Route = platform.SessionRoute{Key: "opaque-room-route", IsGroup: true}
+	if err := groupReplier.AskChoices(context.Background(), approvalPromptForTest("cmd"), []platform.Choice{groupChoice}); err != nil {
+		t.Fatal(err)
+	}
+	if opts, _ := groupReplier.taskCards.snapshot("task-group"); opts.WaitingApprovals != 1 {
+		t.Fatalf("WaitingApprovals=%d, want 1 when Route.IsGroup is true regardless of key format", opts.WaitingApprovals)
 	}
 }

@@ -15,7 +15,7 @@ func (h *Handler) handleFeishuHelpCommand(ctx context.Context, msg platform.Inco
 	}
 	authorized := h.isAdminMessage(msg)
 	section := feishuHelpSection(command, authorized)
-	choices := platformChoicesWithMetadata(feishuHelpChoices(section, authorized), feishuChoiceSessionMetadata(msg, routeUserID))
+	choices := platformChoicesWithRoute(feishuHelpChoices(section, authorized), platformMessageChoiceRoute(msg, routeUserID))
 	if err := reply.AskChoices(ctx, feishuHelpPrompt(section, authorized), choices); err != nil {
 		log.Printf("[handler] failed to send feishu help card to %s: %v", msg.UserID, err)
 		return false

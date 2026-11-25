@@ -18,6 +18,7 @@ type broadcastAgentsRequest struct {
 	accountID    string
 	userID       string
 	routeUserID  string
+	routeIsGroup bool
 	replyWriter  platform.Replier
 	names        []string
 	message      string
@@ -63,7 +64,7 @@ func (h *Handler) runBroadcastAgent(req broadcastAgentsRequest, reply platform.R
 	agentCtx, cancel := contextWithTaskTimeout(req.ctx, progressCfg)
 	defer cancel()
 	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
-		actorUserID: req.userID, routeUserID: req.routeUserID,
+		actorUserID: req.userID, routeUserID: req.routeUserID, routeIsGroup: req.routeIsGroup,
 		agentName: name, reply: reply,
 	})
 	runtime, ok := h.beginBroadcastRuntime(req, name, ag, agentCtx, reply, results)
@@ -161,7 +162,7 @@ func (h *Handler) beginClaudeBroadcastRuntime(req broadcastAgentsRequest, name s
 func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name string, ag agent.Agent, ctx context.Context, reply platform.Replier, results chan<- broadcastAgentResult) (broadcastAgentRuntime, bool) {
 	interactionLease := &agentInteractionLease{}
 	ctx = h.withAgentInteractions(ctx, agentInteractionContextOptions{
-		actorUserID: req.userID, routeUserID: req.routeUserID,
+		actorUserID: req.userID, routeUserID: req.routeUserID, routeIsGroup: req.routeIsGroup,
 		agentName: name, reply: reply, lease: interactionLease,
 	})
 	_, liveCodexLifecycle := ag.(agent.CodexLiveRuntimeAgent)

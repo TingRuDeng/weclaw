@@ -328,23 +328,19 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		log.Printf("[feishu] ignored duplicate card action event: event_id=%s", action.EventID)
 		return duplicateCardActionResponse(), nil
 	}
-	metadata := map[string]string{"source": "card.action.trigger"}
-	if action.SessionKey != "" {
-		metadata[feishuSessionMetadataKey] = action.SessionKey
-	}
 	msg := platform.IncomingMessage{
 		Platform:    platform.PlatformFeishu,
 		AccountID:   a.creds.AppID,
 		UserID:      action.UserID,
 		UserAliases: action.UserAliases,
 		ChatID:      action.ChatID,
-		Route:       platform.SessionRoute{Key: action.SessionKey},
+		Route:       platform.SessionRoute{Key: action.SessionKey, IsGroup: action.SessionGroup},
 		MessageID:   regularCardActionMessageID(action),
 		RawCommand: &platform.CardAction{
 			Action: action.Action,
 			Value:  regularCardActionValue(action),
 		},
-		Metadata: metadata,
+		Metadata: map[string]string{"source": "card.action.trigger"},
 	}
 	ticket := a.dispatches.reserve(feishuDispatchKey(msg), feishuDispatchOperationLabel(msg))
 	if isInlineCardCommand(action.Choice) {

@@ -15,6 +15,7 @@ import (
 type codexSwitchOptions struct {
 	actorUserID        string
 	authorizedIdentity string
+	routeIsGroup       bool
 	platform           platform.PlatformName
 	accountID          string
 	reply              platform.Replier
@@ -45,6 +46,7 @@ type codexNewRequest struct {
 	actorUserID        string
 	authorizedIdentity string
 	userID             string
+	routeIsGroup       bool
 	agentName          string
 	workspaceRoot      string
 	agent              agent.Agent
@@ -67,7 +69,9 @@ func (h *Handler) handleCodexNewForRouteResult(req codexNewRequest) navigationCo
 			ctx: req.ctx, taskContext: req.taskContext,
 			actorUserID:        firstNonBlank(req.actorUserID, req.userID),
 			authorizedIdentity: strings.TrimSpace(req.authorizedIdentity),
-			routeUserID:        req.userID, agentName: req.agentName, agent: req.agent,
+			routeUserID:        req.userID,
+			routeIsGroup:       req.routeIsGroup || (req.platform == platform.PlatformFeishu && isLegacyFeishuGroupRouteKey(req.userID)),
+			agentName:          req.agentName, agent: req.agent,
 			route: codexConversationRoute{
 				bindingKey: bindingKey, workspaceRoot: req.workspaceRoot,
 				conversationID: conversationID,
@@ -122,7 +126,9 @@ func (req codexSwitchRequest) acquireRequest(route codexConversationRoute) codex
 		ctx: req.ctx, taskContext: codexExternalTaskContext(req),
 		actorUserID:        firstNonBlank(req.options.actorUserID, req.userID),
 		authorizedIdentity: strings.TrimSpace(req.options.authorizedIdentity),
-		routeUserID:        req.userID, agentName: req.agentName, agent: req.agent,
+		routeUserID:        req.userID,
+		routeIsGroup:       req.options.routeIsGroup || (req.options.platform == platform.PlatformFeishu && isLegacyFeishuGroupRouteKey(req.userID)),
+		agentName:          req.agentName, agent: req.agent,
 		route: route, platform: req.options.platform, accountID: req.options.accountID,
 		reply: req.options.reply,
 	}

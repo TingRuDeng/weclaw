@@ -22,11 +22,12 @@ type approvalPanelItem struct {
 }
 
 type approvalPanelChoice struct {
-	ID         string
-	Label      string
-	Owner      string
-	Conv       string
-	SessionKey string
+	ID           string
+	Label        string
+	Owner        string
+	Conv         string
+	SessionKey   string
+	SessionGroup bool
 }
 
 type approvalPanelSnapshot struct {
@@ -59,12 +60,14 @@ func newApprovalPanelItem(req approvalPanelRequest) (approvalPanelItem, bool) {
 		if key == "" {
 			key = firstNonEmpty(strings.TrimSpace(choice.Metadata["approval_key"]), approvalPayloadKey(options))
 		}
+		route := choiceSessionRoute(choice)
 		itemChoices = append(itemChoices, approvalPanelChoice{
-			ID:         id,
-			Label:      label,
-			Owner:      strings.TrimSpace(choice.Metadata[approvalOwnerValueKey]),
-			Conv:       req.Conv,
-			SessionKey: strings.TrimSpace(choice.Metadata[feishuSessionMetadataKey]),
+			ID:           id,
+			Label:        label,
+			Owner:        strings.TrimSpace(choice.Metadata[approvalOwnerValueKey]),
+			Conv:         req.Conv,
+			SessionKey:   route.Key,
+			SessionGroup: route.IsGroup,
 		})
 	}
 	if key == "" || len(itemChoices) == 0 {
@@ -223,6 +226,9 @@ func approvalPanelButtons(item approvalPanelItem) []map[string]any {
 		}
 		if choice.SessionKey != "" {
 			value[feishuSessionMetadataKey] = choice.SessionKey
+			if choice.SessionGroup {
+				value[feishuSessionGroupValueKey] = "1"
+			}
 		}
 		if choice.Owner != "" {
 			value[approvalOwnerValueKey] = choice.Owner

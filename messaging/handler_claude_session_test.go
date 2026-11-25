@@ -19,11 +19,11 @@ func TestHandleGlobalNewCommitsClaudeACPSession(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(304, "/new"))
 
-	binding := h.ensureClaudeSessions().binding(claudeBindingKey("user-1", "claude"))
+	binding := h.ensureClaudeSessions().binding(claudeBindingKey(testWeChatRoute, "claude"))
 	if binding.SessionID != "session-new" || binding.Status != claudeBindingReady {
 		t.Fatalf("binding=%+v，期望立即提交新 ACP 会话", binding)
 	}
-	wantConversationID := buildClaudeConversationID("user-1", "claude", workspace)
+	wantConversationID := buildClaudeConversationID(testWeChatRoute, "claude", workspace)
 	if ag.resetConversationID() != wantConversationID || len(calls.texts()) == 0 {
 		t.Fatalf("reset=%q messages=%#v", ag.resetConversationID(), calls.texts())
 	}

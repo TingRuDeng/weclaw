@@ -35,10 +35,11 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 			callbackValueString(value, "action_key"),
 			callbackValueString(value, "actionKey"),
 		),
-		Owner:      callbackValueString(value, approvalOwnerValueKey),
-		Panel:      callbackValueString(value, "approval_panel") == "1",
-		Conv:       callbackValueString(value, "conv"),
-		SessionKey: callbackValueString(value, feishuSessionMetadataKey),
+		Owner:        callbackValueString(value, approvalOwnerValueKey),
+		Panel:        callbackValueString(value, "approval_panel") == "1",
+		Conv:         callbackValueString(value, "conv"),
+		SessionKey:   callbackValueString(value, feishuSessionMetadataKey),
+		SessionGroup: parseCardActionSessionGroup(value, callbackValueString(value, feishuSessionMetadataKey)),
 		AgentName: firstNonEmpty(
 			callbackValueString(value, platform.ChoiceMetadataAgentName),
 			callbackValueString(value, modelSettingAgentKey),
@@ -60,6 +61,13 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 		return parsedCardAction{}, false
 	}
 	return parsed, true
+}
+
+func parseCardActionSessionGroup(value map[string]interface{}, sessionKey string) bool {
+	if raw := callbackValueString(value, feishuSessionGroupValueKey); raw != "" {
+		return raw == "1" || strings.EqualFold(raw, "true")
+	}
+	return isLegacyFeishuGroupSessionKey(sessionKey)
 }
 
 func cardActionEventID(event *callback.CardActionTriggerEvent) string {

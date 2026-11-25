@@ -86,8 +86,8 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 		if msg.Platform != platform.PlatformFeishu || msg.UserID != "ou_user" || msg.ChatID != "oc_chat" {
 			t.Fatalf("msg=%#v, want feishu ids", msg)
 		}
-		if msg.Metadata["feishu_session_key"] != "feishu:tenant_1:group:oc_1:om_root" {
-			t.Fatalf("msg.Metadata=%#v, want feishu session key", msg.Metadata)
+		if msg.SessionRouteKey() != "feishu:tenant_1:group:oc_1:om_root" || !msg.IsGroupSession() {
+			t.Fatalf("msg.Route=%#v, want feishu group session route", msg.Route)
 		}
 		if msg.RawCommand.Value["navigation_snapshot"] != "snapshot-1" {
 			t.Fatalf("msg.RawCommand=%#v, want navigation snapshot", msg.RawCommand)

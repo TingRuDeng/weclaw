@@ -91,7 +91,7 @@ func newFrozenWorkspaceFixture(t *testing.T) frozenWorkspaceFixture {
 		t.Fatalf("mkdir workspace B: %v", err)
 	}
 	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	h.ensureCodexSessions().setThread(bindingKey, workspaceA, "thread-a")
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceA)
 	h.ensureCodexSessions().setThread(bindingKey, workspaceB, "thread-b")
@@ -127,7 +127,7 @@ func TestCodexBackgroundTaskKeepsWorkspaceWhenSwitchAgentUnsupported(t *testing.
 	handleTestWeChatMessage(fixture.h, ctx, client, newTextMessage(10, "/codex A 任务"))
 	waitForCodexThreadAgentEnter(t, fixture.agent)
 
-	conversationA := buildCodexConversationID("user-1", "codex", fixture.workspaceA)
+	conversationA := buildCodexConversationID(testWeChatRoute, "codex", fixture.workspaceA)
 	if got := fixture.agent.conversationCwd(conversationA); got != normalizeCodexWorkspaceRoot(fixture.workspaceA) {
 		t.Fatalf("conversation cwd=%q, want %q", got, normalizeCodexWorkspaceRoot(fixture.workspaceA))
 	}
@@ -204,11 +204,11 @@ func TestGuideSendsPendingMessageAndSuppressesFirstReply(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "codex", message: "第一条", clientID: "client-1"})
+		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: testWeChatRoute, reply: reply, name: "codex", message: "第一条", clientID: "client-1"})
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), name: "codex", message: "第二条", clientID: "client-2"})
+	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: testWeChatRoute, reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), name: "codex", message: "第二条", clientID: "client-2"})
 
 	guideDone := make(chan struct{})
 	go func() {
@@ -317,11 +317,11 @@ func TestCancelWithdrawsPendingGuideAndKeepsRunningTask(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "codex", message: "第一条", clientID: "client-1"})
+		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: testWeChatRoute, reply: reply, name: "codex", message: "第一条", clientID: "client-1"})
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), name: "codex", message: "第二条", clientID: "client-2"})
+	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: testWeChatRoute, reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), name: "codex", message: "第二条", clientID: "client-2"})
 
 	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "/cancel"))
 	ag.release <- struct{}{}

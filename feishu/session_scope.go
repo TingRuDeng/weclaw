@@ -8,10 +8,17 @@ import (
 )
 
 const (
-	feishuSessionMetadataKey = "feishu_session_key"
-	feishuMentionMetadataKey = "feishu_is_mentioned"
-	feishuScopePrefix        = "feishu"
+	feishuSessionMetadataKey   = "feishu_session_key"
+	feishuSessionGroupValueKey = "feishu_session_group"
+	feishuMentionMetadataKey   = "feishu_is_mentioned"
+	feishuScopePrefix          = "feishu"
 )
+
+// isLegacyFeishuGroupSessionKey 仅用于解析升级前已发出、未带结构化群聊标记的旧卡片回调载荷。
+func isLegacyFeishuGroupSessionKey(sessionKey string) bool {
+	normalized := ":" + strings.ToLower(strings.TrimSpace(sessionKey)) + ":"
+	return strings.Contains(normalized, ":group:")
+}
 
 type feishuMentionCheck struct {
 	NormalizedMentioned bool

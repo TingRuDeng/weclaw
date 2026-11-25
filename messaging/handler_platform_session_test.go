@@ -379,3 +379,71 @@ func TestExplicitUnavailableRouteAgentDoesNotFallbackToPlatformDefault(t *testin
 		t.Fatalf("status=%q, must not silently fall back to codex", status)
 	}
 }
+
+func TestWeChatMultiAccountIsolatesSessionsForSameUser(t *testing.T) {
+	codex := &fakeAgent{reply: "codex reply", info: agent.AgentInfo{Name: "codex", Type: "test"}}
+	claude := &fakeAgent{reply: "claude reply", info: agent.AgentInfo{Name: "claude", Type: "test"}}
+	h := NewHandler(func(_ context.Context, name string) agent.Agent {
+		if name == "claude" {
+			return claude
+		}
+		return codex
+	}, nil)
+	h.SetDefaultAgent("codex", codex)
+	h.agents["claude"] = claude
+	h.SetAgentMetas([]AgentMeta{{Name: "codex"}, {Name: "claude"}})
+
+	replyA := platformtest.NewReplier(platform.Capabilities{Text: true})
+	replyB := platformtest.NewReplier(platform.Capabilities{Text: true})
+	// 同一微信用户在 bot-a 切到 claude，不应影响其在 bot-b 的默认 codex 会话。
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformWeChat, AccountID: "bot-a", UserID: "user-1", ChatID: "user-1",
+		Route: platform.SessionRoute{Key: "wechat:bot-a:user-1"}, MessageID: "m-a-1", Text: "/cc",
+	}, replyA)
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformWeChat, AccountID: "bot-a", UserID: "user-1", ChatID: "user-1",
+		Route: platform.SessionRoute{Key: "wechat:bot-a:user-1"}, MessageID: "m-a-2", Text: "hello from a",
+	}, replyA)
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformWeChat, AccountID: "bot-b", UserID: "user-1", ChatID: "user-1",
+		Route: platform.SessionRoute{Key: "wechat:bot-b:user-1"}, MessageID: "m-b-1", Text: "hello from b",
+	}, replyB)
+
+	waitForFakeAgentCalls(t, claude, 1)
+	waitForFakeAgentCalls(t, codex, 1)
+	wantClaudeConv := buildClaudeConversationID("wechat:bot-a:user-1", "claude", defaultAttachmentWorkspace())
+	if claude.lastChatConversationID() != wantClaudeConv {
+		t.Fatalf("claude conversationID=%q, want %q", claude.lastChatConversationID(), wantClaudeConv)
+	}
+	wantCodexConv := buildCodexConversationID("wechat:bot-b:user-1", "codex", defaultAttachmentWorkspace())
+	if codex.lastChatConversationID() != wantCodexConv {
+		t.Fatalf("codex conversationID=%q, want %q", codex.lastChatConversationID(), wantCodexConv)
+	}
+	if got := h.defaultAgentNameForRoute("wechat:bot-a:user-1", platform.PlatformWeChat, "bot-a"); got != "claude" {
+		t.Fatalf("bot-a agent=%q, want claude", got)
+	}
+	if got := h.defaultAgentNameForRoute("wechat:bot-b:user-1", platform.PlatformWeChat, "bot-b"); got != "codex" {
+		t.Fatalf("bot-b agent=%q, want codex", got)
+	}
+}
+
+func TestWeChatMultiAccountRouteMatchesActorAndGlobalWorkspaceSync(t *testing.T) {
+	if !codexRouteUserMatchesActor("wechat:bot-a:user-1", "user-1") {
+		t.Fatal("多账号微信路由应匹配对应发送者")
+	}
+	if !codexRouteUserMatchesActor("wechat:user-1", "user-1") {
+		t.Fatal("旧单账号微信路由应继续匹配发送者")
+	}
+	if codexRouteUserMatchesActor("wechat:bot-a:user-2", "user-1") {
+		t.Fatal("其他用户的微信路由不得匹配当前发送者")
+	}
+	if codexRouteUserMatchesActor("feishu:tenant:dm:chat:user-1", "user-1") {
+		t.Fatal("飞书窗口路由不得误匹配为微信用户直连路由")
+	}
+	if !shouldSyncCodexGlobalWorkspace("user-1", "wechat:bot-a:user-1") {
+		t.Fatal("微信私聊路由应允许同步默认工作目录")
+	}
+	if shouldSyncCodexGlobalWorkspace("user-1", "feishu:tenant:dm:chat:user-1") {
+		t.Fatal("飞书窗口路由不得同步修改全局工作目录")
+	}
+}

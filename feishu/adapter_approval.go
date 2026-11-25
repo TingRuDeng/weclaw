@@ -54,17 +54,13 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 }
 
 func (a *Adapter) approvalActionMessage(action parsedCardAction, resultCh chan platform.CardActionResult) platform.IncomingMessage {
-	metadata := map[string]string{"source": "card.action.trigger"}
-	if action.SessionKey != "" {
-		metadata[feishuSessionMetadataKey] = action.SessionKey
-	}
 	return platform.IncomingMessage{
 		Platform:    platform.PlatformFeishu,
 		AccountID:   a.creds.AppID,
 		UserID:      action.UserID,
 		UserAliases: action.UserAliases,
 		ChatID:      action.ChatID,
-		Route:       platform.SessionRoute{Key: action.SessionKey},
+		Route:       platform.SessionRoute{Key: action.SessionKey, IsGroup: action.SessionGroup},
 		MessageID:   approvalActionMessageID(action),
 		RawCommand: &platform.CardAction{
 			Action: action.Action,
@@ -77,7 +73,7 @@ func (a *Adapter) approvalActionMessage(action parsedCardAction, resultCh chan p
 			},
 			Result: resultCh,
 		},
-		Metadata: metadata,
+		Metadata: map[string]string{"source": "card.action.trigger"},
 	}
 }
 

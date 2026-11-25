@@ -12,21 +12,22 @@ import (
 
 // codexAgentTaskOptions 保存 Codex 后台任务需要的上下文，避免长参数列表掩盖调用意图。
 type codexAgentTaskOptions struct {
-	ctx         context.Context
-	platform    platform.PlatformName
-	accountID   string
-	userID      string
-	routeUserID string
-	reply       platform.Replier
-	agentName   string
-	message     string
-	clientID    string
-	messageKey  string
-	replyPrefix string
-	agent       agent.Agent
-	progressCfg config.ProgressConfig
-	route       codexConversationRoute
-	trace       observability.TraceContext
+	ctx          context.Context
+	platform     platform.PlatformName
+	accountID    string
+	userID       string
+	routeUserID  string
+	routeIsGroup bool
+	reply        platform.Replier
+	agentName    string
+	message      string
+	clientID     string
+	messageKey   string
+	replyPrefix  string
+	agent        agent.Agent
+	progressCfg  config.ProgressConfig
+	route        codexConversationRoute
+	trace        observability.TraceContext
 }
 
 // codexAgentTaskRuntime 保存已经登记 active task 后的运行时资源。

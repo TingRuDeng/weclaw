@@ -24,7 +24,7 @@ func TestCodexCleanRemovesMissingStoredWorkspaces(t *testing.T) {
 	h.agents["codex"] = ag
 	h.SetCodexLocalSessionDir(t.TempDir())
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	h.ensureCodexSessions().setThread(bindingKey, missingWorkspace, "thread-missing")
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, missingWorkspace)
 	h.setCodexBrowseWorkspace(bindingKey, missingWorkspace)

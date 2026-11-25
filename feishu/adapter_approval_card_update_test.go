@@ -105,11 +105,11 @@ func TestHandleApprovalCardActionPreservesSessionKey(t *testing.T) {
 
 	select {
 	case msg := <-dispatched:
-		if got := msg.Metadata[feishuSessionMetadataKey]; got != sessionKey {
-			t.Fatalf("metadata=%#v, want session key %q", msg.Metadata, sessionKey)
+		if got := msg.SessionRouteKey(); got != sessionKey || msg.IsGroupSession() {
+			t.Fatalf("route=%#v, want session key %q", msg.Route, sessionKey)
 		}
-		if got := msg.SessionRouteKey(); got != sessionKey {
-			t.Fatalf("route=%q, want session key %q", got, sessionKey)
+		if _, duplicated := msg.Metadata[feishuSessionMetadataKey]; duplicated {
+			t.Fatalf("metadata=%#v, should not duplicate feishu_session_key", msg.Metadata)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")

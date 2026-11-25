@@ -22,6 +22,7 @@ type codexSessionCommandRequest struct {
 	ActorUserID        string
 	AuthorizedIdentity string
 	RouteUserID        string
+	RouteIsGroup       bool
 	Trimmed            string
 	Platform           platform.PlatformName
 	AccountID          string
@@ -135,6 +136,7 @@ type codexShortSelectionRequest struct {
 	UserID             string
 	ActorUserID        string
 	AuthorizedIdentity string
+	RouteIsGroup       bool
 	AgentName          string
 	WorkspaceRoot      string
 	Agent              agent.Agent
@@ -156,6 +158,7 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 			UserID:             req.UserID,
 			ActorUserID:        req.ActorUserID,
 			AuthorizedIdentity: req.AuthorizedIdentity,
+			RouteIsGroup:       req.RouteIsGroup,
 			BindingKey:         req.BindingKey,
 			AgentName:          req.AgentName,
 			Target:             req.Target,
@@ -172,7 +175,8 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 			workspaceRoot: req.WorkspaceRoot, agent: req.Agent,
 			target: req.Target,
 			options: codexSwitchOptions{
-				actorUserID: req.ActorUserID, authorizedIdentity: req.AuthorizedIdentity, platform: req.Platform,
+				actorUserID: req.ActorUserID, authorizedIdentity: req.AuthorizedIdentity,
+				routeIsGroup: req.RouteIsGroup, platform: req.Platform,
 				accountID: req.AccountID, reply: req.Reply,
 				externalTaskCtx: req.TaskContext,
 			},
@@ -184,6 +188,7 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 		UserID:             req.UserID,
 		ActorUserID:        req.ActorUserID,
 		AuthorizedIdentity: req.AuthorizedIdentity,
+		RouteIsGroup:       req.RouteIsGroup,
 		BindingKey:         req.BindingKey,
 		AgentName:          req.AgentName,
 		Target:             req.Target,

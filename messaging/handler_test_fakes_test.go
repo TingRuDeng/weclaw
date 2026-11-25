@@ -104,6 +104,8 @@ func waitForFakeAgentCalls(t *testing.T, ag *fakeAgent, want int) {
 	t.Fatalf("未等到 fake agent 调用次数=%d，实际=%d", want, ag.chatCallCount())
 }
 
+const testWeChatRoute = "wechat:bot-1:user-1"
+
 func newTextMessage(id int64, text string) ilink.WeixinMessage {
 	return ilink.WeixinMessage{
 		MessageID:    id,

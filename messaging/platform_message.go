@@ -16,6 +16,7 @@ type platformMessageRuntime struct {
 	msg                  platform.IncomingMessage
 	reply                platform.Replier
 	routeUserID          string
+	routeIsGroup         bool
 	text                 string
 	clientID             string
 	messageKey           string
@@ -32,8 +33,8 @@ func (runtime platformMessageRuntime) sendText(text string) {
 func (runtime platformMessageRuntime) agentRequest(message string) agentMessageRequest {
 	return agentMessageRequest{
 		ctx: runtime.ctx, platformName: runtime.msg.Platform, accountID: runtime.msg.AccountID,
-		userID: runtime.msg.UserID, routeUserID: runtime.routeUserID, reply: runtime.reply,
-		message: message, clientID: runtime.clientID, messageKey: runtime.messageKey, trace: runtime.trace,
+		userID: runtime.msg.UserID, routeUserID: runtime.routeUserID, routeIsGroup: runtime.routeIsGroup,
+		reply: runtime.reply, message: message, clientID: runtime.clientID, messageKey: runtime.messageKey, trace: runtime.trace,
 	}
 }
 
@@ -367,7 +368,8 @@ func (h *Handler) knownAgentNames(names []string) []string {
 func newBroadcastAgentsRequest(runtime platformMessageRuntime, names []string, message string) broadcastAgentsRequest {
 	return broadcastAgentsRequest{
 		ctx: runtime.ctx, platformName: runtime.msg.Platform, accountID: runtime.msg.AccountID,
-		userID: runtime.msg.UserID, routeUserID: runtime.routeUserID, replyWriter: runtime.reply,
-		names: names, message: message, clientID: runtime.clientID, messageKey: runtime.messageKey, trace: runtime.trace,
+		userID: runtime.msg.UserID, routeUserID: runtime.routeUserID, routeIsGroup: runtime.routeIsGroup,
+		replyWriter: runtime.reply, names: names, message: message,
+		clientID: runtime.clientID, messageKey: runtime.messageKey, trace: runtime.trace,
 	}
 }

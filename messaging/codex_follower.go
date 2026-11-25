@@ -299,6 +299,7 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 		ctx:            ctx,
 		actorUserID:    snapshot.Target.ActorUserID,
 		routeUserID:    snapshot.RouteUserID,
+		routeIsGroup:   snapshot.Target.RouteIsGroup || isLegacyFeishuGroupRouteKey(snapshot.RouteUserID),
 		agentName:      snapshot.AgentName,
 		agent:          ag,
 		conversationID: snapshot.ConversationID,

@@ -46,6 +46,7 @@ type parsedCardAction struct {
 	Panel              bool
 	Conv               string
 	SessionKey         string
+	SessionGroup       bool
 	AgentName          string
 	CodexThreadID      string
 	ClaudeSessionID    string
@@ -181,8 +182,11 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		if owner := strings.TrimSpace(choice.Metadata[approvalOwnerValueKey]); owner != "" {
 			value[approvalOwnerValueKey] = owner
 		}
-		if sessionKey := strings.TrimSpace(choice.Metadata[feishuSessionMetadataKey]); sessionKey != "" {
-			value[feishuSessionMetadataKey] = sessionKey
+		if route := choiceSessionRoute(choice); route.Key != "" {
+			value[feishuSessionMetadataKey] = route.Key
+			if route.IsGroup {
+				value[feishuSessionGroupValueKey] = "1"
+			}
 		}
 		if agentName := strings.TrimSpace(choice.Metadata[modelSettingAgentKey]); agentName != "" {
 			value[modelSettingAgentKey] = agentName
@@ -303,6 +307,17 @@ func compactOneLine(text string, maxRunes int) string {
 		return string(runes[:maxRunes])
 	}
 	return string(runes[:maxRunes-3]) + "..."
+}
+
+// choiceSessionRoute 优先读取一等结构化 Route，仅在旧调用只填 metadata 时降级读取。
+func choiceSessionRoute(choice platform.Choice) platform.SessionRoute {
+	if key := strings.TrimSpace(choice.Route.Key); key != "" {
+		return platform.SessionRoute{Key: key, IsGroup: choice.Route.IsGroup}
+	}
+	if key := strings.TrimSpace(choice.Metadata[feishuSessionMetadataKey]); key != "" {
+		return platform.SessionRoute{Key: key, IsGroup: choice.Route.IsGroup}
+	}
+	return platform.SessionRoute{IsGroup: choice.Route.IsGroup}
 }
 
 // choiceCardKind 只标记 Agent 授权卡片，避免普通导航/选择卡片点击后被改成授权状态。

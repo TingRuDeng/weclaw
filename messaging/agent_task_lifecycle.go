@@ -43,6 +43,7 @@ type agentTaskAdmissionNotice struct {
 	reply          platform.Replier
 	userID         string
 	routeUserID    string
+	routeIsGroup   bool
 	agentName      string
 	executionKey   string
 	task           *activeAgentTask

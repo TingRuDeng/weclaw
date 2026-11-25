@@ -22,21 +22,22 @@ func TestReadAttachmentDataRejectsOversizedLocalFile(t *testing.T) {
 	}
 	_ = file.Close()
 
-	_, err = NewHandler(nil, nil).readAttachmentData(context.Background(), platform.Attachment{Path: path})
+	_, err = NewHandler(nil, nil).readAttachmentData(platform.Attachment{Path: path})
 	if err == nil {
 		t.Fatal("oversized attachment should be rejected")
 	}
 }
 
-func TestReadAttachmentDataRequiresInjectedRemoteDownloader(t *testing.T) {
-	_, err := NewHandler(nil, nil).readAttachmentData(context.Background(), platform.Attachment{
-		Metadata: map[string]string{
-			"encrypt_query_param": "download-param",
-			"aes_key":             "aes-key",
-		},
+func TestReadAttachmentDataReportsDownloadErrorOrMissingPath(t *testing.T) {
+	_, err := NewHandler(nil, nil).readAttachmentData(platform.Attachment{
+		Metadata: map[string]string{"download_error": "cdn failed"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "平台未配置附件下载能力") {
-		t.Fatalf("err=%v, want missing platform downloader error", err)
+	if err == nil || !strings.Contains(err.Error(), "cdn failed") {
+		t.Fatalf("err=%v, want propagated adapter download error", err)
+	}
+	_, err = NewHandler(nil, nil).readAttachmentData(platform.Attachment{})
+	if err == nil || !strings.Contains(err.Error(), "文件缺少下载信息") {
+		t.Fatalf("err=%v, want missing download info error", err)
 	}
 }
 
@@ -69,7 +70,7 @@ func TestSaveIncomingAttachmentUsesUniquePrivateFileAndCleansTemporarySource(t *
 		Path: source, FileName: "report.txt", Metadata: map[string]string{"temporary": "true"},
 	}
 
-	first, err := h.saveIncomingAttachment(context.Background(), attachment)
+	first, err := h.saveIncomingAttachment(attachment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestSaveIncomingAttachmentUsesUniquePrivateFileAndCleansTemporarySource(t *
 		t.Fatal(err)
 	}
 	attachment.Path = secondSource
-	second, err := h.saveIncomingAttachment(context.Background(), attachment)
+	second, err := h.saveIncomingAttachment(attachment)
 	if err != nil {
 		t.Fatal(err)
 	}

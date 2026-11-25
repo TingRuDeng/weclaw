@@ -12,6 +12,9 @@ func isPrivatePlatformMessage(msg platform.IncomingMessage, routeUserID string) 
 	if msg.Platform != platform.PlatformFeishu {
 		return true
 	}
+	if msg.Route.IsGroup {
+		return false
+	}
 	chatType := ""
 	if msg.Metadata != nil {
 		chatType = strings.ToLower(strings.TrimSpace(msg.Metadata["feishu_chat_type"]))

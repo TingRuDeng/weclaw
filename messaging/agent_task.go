@@ -17,6 +17,7 @@ type agentTaskOptions struct {
 	accountID     string
 	userID        string
 	routeUserID   string
+	routeIsGroup  bool
 	reply         platform.Replier
 	agentName     string
 	workspaceRoot string
@@ -63,7 +64,7 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 	opts.ctx = context.WithoutCancel(opts.ctx)
 	agentCtx, cancel := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
 	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
-		actorUserID: opts.userID, routeUserID: opts.routeUserID,
+		actorUserID: opts.userID, routeUserID: opts.routeUserID, routeIsGroup: opts.routeIsGroup,
 		agentName: opts.agentName, reply: opts.reply,
 	})
 	key := h.agentExecutionKeyForRoute(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
@@ -77,7 +78,7 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 		cancel()
 		h.replyAgentTaskAdmission(agentTaskAdmissionNotice{
 			ctx: opts.ctx, platformName: opts.platformName, accountID: opts.accountID,
-			reply: opts.reply, userID: opts.userID, routeUserID: opts.routeUserID,
+			reply: opts.reply, userID: opts.userID, routeUserID: opts.routeUserID, routeIsGroup: opts.routeIsGroup,
 			agentName: opts.agentName, executionKey: key, task: admission.task,
 		}, admission.status)
 		return

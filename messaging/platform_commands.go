@@ -199,6 +199,7 @@ func (h *Handler) handleCodexSessionPlatformCommand(ctx context.Context, req pla
 		ActorUserID:        msg.UserID,
 		AuthorizedIdentity: authorizedIdentity,
 		RouteUserID:        routeUserID,
+		RouteIsGroup:       platformMessageIsGroup(msg, routeUserID),
 		Trimmed:            req.Trimmed,
 		Platform:           msg.Platform,
 		AccountID:          msg.AccountID,

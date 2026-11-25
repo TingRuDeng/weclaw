@@ -94,7 +94,7 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 		approvalKey := approvalPendingKey(req.RequestID)
 		choices := approvalChoices(
 			req.Options, approvalKey, taskCardIDFromReplier(opts.reply),
-			opts.actorUserID, opts.routeUserID, opts.agentName,
+			opts.actorUserID, opts.routeUserID, opts.routeIsGroup, opts.agentName,
 		)
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")

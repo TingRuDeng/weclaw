@@ -18,6 +18,7 @@ type agentMessageRequest struct {
 	accountID    string
 	userID       string
 	routeUserID  string
+	routeIsGroup bool
 	reply        platform.Replier
 	name         string
 	message      string
@@ -101,7 +102,7 @@ func (h *Handler) dispatchAgentMessage(req agentMessageRequest, ag agent.Agent, 
 func newCodexAgentTaskOptions(runtime agentDispatchRuntime) codexAgentTaskOptions {
 	return codexAgentTaskOptions{
 		ctx: runtime.req.ctx, platform: runtime.req.platformName, accountID: runtime.req.accountID,
-		userID: runtime.req.userID, routeUserID: runtime.req.routeUserID,
+		userID: runtime.req.userID, routeUserID: runtime.req.routeUserID, routeIsGroup: runtime.req.routeIsGroup,
 		reply: runtime.req.reply, agentName: runtime.req.name, message: runtime.req.message,
 		clientID: runtime.req.clientID, messageKey: runtime.req.messageKey, replyPrefix: runtime.prefix,
 		agent: runtime.agent, progressCfg: runtime.progressCfg, trace: runtime.req.trace,
@@ -112,9 +113,9 @@ func newCodexAgentTaskOptions(runtime agentDispatchRuntime) codexAgentTaskOption
 func newAgentTaskOptions(runtime agentDispatchRuntime) agentTaskOptions {
 	return agentTaskOptions{
 		ctx: runtime.req.ctx, platformName: runtime.req.platformName, accountID: runtime.req.accountID,
-		userID: runtime.req.userID, routeUserID: runtime.req.routeUserID, reply: runtime.req.reply,
-		agentName: runtime.req.name, message: runtime.req.message, replyPrefix: runtime.prefix,
-		agent: runtime.agent, progressCfg: runtime.progressCfg, trace: runtime.req.trace,
+		userID: runtime.req.userID, routeUserID: runtime.req.routeUserID, routeIsGroup: runtime.req.routeIsGroup,
+		reply: runtime.req.reply, agentName: runtime.req.name, message: runtime.req.message,
+		replyPrefix: runtime.prefix, agent: runtime.agent, progressCfg: runtime.progressCfg, trace: runtime.req.trace,
 	}
 }
 
@@ -132,12 +133,12 @@ func (h *Handler) runSynchronousAgentMessage(runtime synchronousAgentRuntime) {
 		h.replyAgentTaskAdmission(agentTaskAdmissionNotice{
 			ctx: runtime.replyCtx, platformName: runtime.req.platformName, accountID: runtime.req.accountID,
 			reply: runtime.req.reply, userID: runtime.req.userID, routeUserID: runtime.req.routeUserID,
-			agentName: runtime.req.name, executionKey: key, task: admission.task,
+			routeIsGroup: runtime.req.routeIsGroup, agentName: runtime.req.name, executionKey: key, task: admission.task,
 		}, admission.status)
 		return
 	}
 	taskCtx := h.withAgentInteractions(admission.taskCtx, agentInteractionContextOptions{
-		actorUserID: runtime.req.userID, routeUserID: runtime.req.routeUserID,
+		actorUserID: runtime.req.userID, routeUserID: runtime.req.routeUserID, routeIsGroup: runtime.req.routeIsGroup,
 		agentName: runtime.req.name, reply: runtime.req.reply,
 	})
 	unlock := h.lockAgentExecution(key)

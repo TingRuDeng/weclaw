@@ -88,8 +88,26 @@ func TestFeishuModeCommandUsesSessionScopedChoiceCard(t *testing.T) {
 		t.Fatalf("choices=%#v，期望 default/yolo 且标记当前项", card.Choices)
 	}
 	for _, choice := range card.Choices {
-		if choice.Metadata[feishuSessionMetadataKey] != route {
-			t.Fatalf("choice=%#v，期望透传飞书窗口路由", choice)
+		if choice.Route.Key != route || choice.Route.IsGroup {
+			t.Fatalf("choice=%#v，期望透传一等飞书私聊窗口路由", choice)
+		}
+		if _, duplicated := choice.Metadata[feishuSessionMetadataKey]; duplicated {
+			t.Fatalf("choice=%#v，不应再向 Metadata 双写 feishu_session_key", choice)
+		}
+	}
+
+	groupRoute := "feishu:tenant:group:chat-g"
+	groupReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "mode-card-group", Text: "/mode",
+		Route: platform.SessionRoute{Key: groupRoute, IsGroup: true},
+	}, groupReply)
+	if len(groupReply.Choices) != 1 || len(groupReply.Choices[0].Choices) != 2 {
+		t.Fatalf("group choices=%#v，期望群聊 /mode 返回选择卡", groupReply.Choices)
+	}
+	for _, choice := range groupReply.Choices[0].Choices {
+		if choice.Route.Key != groupRoute || !choice.Route.IsGroup {
+			t.Fatalf("choice=%#v，期望透传一等飞书群聊窗口路由", choice)
 		}
 	}
 }

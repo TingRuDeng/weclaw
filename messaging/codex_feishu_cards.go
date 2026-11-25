@@ -28,7 +28,7 @@ type feishuCodexChoiceRequest struct {
 	workspaceRoot string
 	fields        []string
 	admin         bool
-	metadata      map[string]string
+	choiceRoute   platform.SessionRoute
 	page          int
 	snapshot      string
 }
@@ -66,6 +66,7 @@ func (h *Handler) handleFeishuCodexSessionCommand(req feishuCodexSessionCommandR
 			ActorUserID:        msg.UserID,
 			AuthorizedIdentity: authorizedIdentity,
 			RouteUserID:        routeUserID,
+			RouteIsGroup:       platformMessageIsGroup(msg, routeUserID),
 			Trimmed:            trimmed,
 			Platform:           msg.Platform,
 			AccountID:          msg.AccountID,
@@ -75,7 +76,7 @@ func (h *Handler) handleFeishuCodexSessionCommand(req feishuCodexSessionCommandR
 		})
 	}
 	if len(req.result.Choices) > 0 {
-		choices := platformChoicesWithMetadata(req.result.Choices, feishuChoiceSessionMetadata(msg, routeUserID))
+		choices := platformChoicesWithRoute(req.result.Choices, platformMessageChoiceRoute(msg, routeUserID))
 		if err := reply.AskChoices(ctx, req.result.Prompt, choices); err == nil {
 			return true
 		} else {
@@ -129,11 +130,10 @@ func (h *Handler) sendFeishuCodexNavigationChoices(req feishuCodexSessionCommand
 		return false
 	}
 	bindingKey := codexBindingKey(req.routeUserID, agentName)
-	metadata := feishuChoiceSessionMetadata(req.message, req.routeUserID)
 	choiceReq := feishuCodexChoiceRequest{
 		ctx: req.ctx, accountID: req.message.AccountID, userID: req.message.UserID, reply: req.reply,
 		bindingKey: bindingKey, fields: fields,
-		admin: h.isAdminMessage(req.message), metadata: metadata, page: req.page.Page,
+		admin: h.isAdminMessage(req.message), choiceRoute: platformMessageChoiceRoute(req.message, req.routeUserID), page: req.page.Page,
 		snapshot: feishuNavigationSnapshotFromMessage(req.message),
 	}
 	if req.page.Kind == "workspaces" {
@@ -192,7 +192,7 @@ func (h *Handler) sendFeishuCodexWorkspaceChoices(req feishuCodexChoiceRequest) 
 		choices[index].ID = "/cx cd " + token
 	}
 	choices = appendFeishuPageNavigation(choices, "/cx", "workspaces", page, snapshot)
-	choices = platformChoicesWithMetadata(choices, req.metadata)
+	choices = platformChoicesWithRoute(choices, req.choiceRoute)
 	return h.askFeishuCodexChoices(feishuCodexChoicePrompt{
 		ctx: req.ctx, userID: req.userID, reply: req.reply,
 		prompt: feishuPaginatedPrompt("Codex 工作空间\n请选择要进入的工作空间。", page), choices: choices,
@@ -240,7 +240,7 @@ func (h *Handler) sendFeishuCodexSessionChoices(req feishuCodexChoiceRequest) bo
 	choices, page := paginateFeishuChoices(choices, req.page)
 	choices = appendFeishuPageNavigation(choices, "/cx", "sessions", page, snapshot)
 	choices = append(choices, feishuNavigationChoice("/cx cd ..", "← 返回上一级"))
-	choices = platformChoicesWithMetadata(choices, req.metadata)
+	choices = platformChoicesWithRoute(choices, req.choiceRoute)
 	prompt := feishuPaginatedPrompt(
 		fmt.Sprintf("%s 会话\n请选择要切换的会话。", shortCodexWorkspaceName(req.workspaceRoot)), page,
 	)

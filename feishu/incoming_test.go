@@ -90,11 +90,11 @@ func TestToIncomingFromMessageParsesText(t *testing.T) {
 	if incoming.Text != "hello  world\nnext" {
 		t.Fatalf("text=%q, want cleaned text", incoming.Text)
 	}
-	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:dm:oc_1:ou_user" {
-		t.Fatalf("metadata=%#v, want scoped DM session", incoming.Metadata)
+	if incoming.SessionRouteKey() != "feishu:cli_a:tenant_1:dm:oc_1:ou_user" || incoming.IsGroupSession() {
+		t.Fatalf("route=%#v, want scoped DM session", incoming.Route)
 	}
-	if incoming.SessionRouteKey() != incoming.Metadata["feishu_session_key"] {
-		t.Fatalf("route=%q metadata=%#v, want first-class route mirrored to legacy metadata", incoming.SessionRouteKey(), incoming.Metadata)
+	if _, duplicated := incoming.Metadata[feishuSessionMetadataKey]; duplicated {
+		t.Fatalf("metadata=%#v, should not duplicate feishu_session_key when Route is populated", incoming.Metadata)
 	}
 	if incoming.Metadata["original_user_id"] != "ou_user" {
 		t.Fatalf("metadata=%#v, want original_user_id=ou_user", incoming.Metadata)
@@ -131,8 +131,8 @@ func TestToIncomingFromMessageDMNewThreadUsesDMSession(t *testing.T) {
 	if !ok {
 		t.Fatal("DM new-thread command should be dispatchable")
 	}
-	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:dm:oc_1:ou_user" {
-		t.Fatalf("metadata=%#v, want plain DM session", incoming.Metadata)
+	if incoming.SessionRouteKey() != "feishu:cli_a:tenant_1:dm:oc_1:ou_user" || incoming.IsGroupSession() {
+		t.Fatalf("route=%#v, want plain DM session", incoming.Route)
 	}
 }
 
@@ -148,8 +148,8 @@ func TestToIncomingFromMessageDMThreadReplyUsesDMSession(t *testing.T) {
 	if !ok {
 		t.Fatal("DM thread reply should be dispatchable")
 	}
-	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:dm:oc_1:ou_user" {
-		t.Fatalf("metadata=%#v, want plain DM session", incoming.Metadata)
+	if incoming.SessionRouteKey() != "feishu:cli_a:tenant_1:dm:oc_1:ou_user" || incoming.IsGroupSession() {
+		t.Fatalf("route=%#v, want plain DM session", incoming.Route)
 	}
 }
 
@@ -286,8 +286,8 @@ func TestToIncomingFromMessageDispatchesMentionedGroup(t *testing.T) {
 	if incoming.UserID != "ou_user" {
 		t.Fatalf("incoming.UserID=%q, want sender open_id for access control", incoming.UserID)
 	}
-	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:group:oc_1" {
-		t.Fatalf("metadata=%#v, want scoped group chat session", incoming.Metadata)
+	if incoming.SessionRouteKey() != "feishu:cli_a:tenant_1:group:oc_1" || !incoming.IsGroupSession() {
+		t.Fatalf("route=%#v, want scoped group chat session", incoming.Route)
 	}
 	if incoming.Metadata["feishu_is_mentioned"] != "true" {
 		t.Fatalf("metadata=%#v, want feishu_is_mentioned=true", incoming.Metadata)
@@ -308,13 +308,13 @@ func TestToIncomingFromMessageScopesSessionByAccount(t *testing.T) {
 	if !firstOK || !secondOK {
 		t.Fatal("mentioned group messages should be dispatchable")
 	}
-	firstKey := firstIncoming.Metadata["feishu_session_key"]
-	secondKey := secondIncoming.Metadata["feishu_session_key"]
+	firstKey := firstIncoming.SessionRouteKey()
+	secondKey := secondIncoming.SessionRouteKey()
 	if firstKey == secondKey {
 		t.Fatalf("session keys should differ across bot accounts: %q", firstKey)
 	}
-	if firstKey != "feishu:cli_a:tenant_1:group:oc_1" {
-		t.Fatalf("session key=%q, want account-scoped key", firstKey)
+	if firstKey != "feishu:cli_a:tenant_1:group:oc_1" || !firstIncoming.IsGroupSession() {
+		t.Fatalf("session key=%q group=%v, want account-scoped key", firstKey, firstIncoming.IsGroupSession())
 	}
 }
 
@@ -334,8 +334,8 @@ func TestToIncomingFromMessageGroupIgnoresRootForSession(t *testing.T) {
 	if !firstOK || !secondOK {
 		t.Fatal("mentioned group reply threads should both be dispatchable")
 	}
-	firstKey := firstIncoming.Metadata["feishu_session_key"]
-	secondKey := secondIncoming.Metadata["feishu_session_key"]
+	firstKey := firstIncoming.SessionRouteKey()
+	secondKey := secondIncoming.SessionRouteKey()
 	if firstKey != "feishu:cli_a:tenant_1:group:oc_1" || secondKey != firstKey {
 		t.Fatalf("session keys=(%q,%q), want same group chat session", firstKey, secondKey)
 	}
@@ -398,8 +398,8 @@ func TestToIncomingFromMessageDispatchesGroupWhenMentionNotRequired(t *testing.T
 	if !ok {
 		t.Fatal("group message should dispatch when require_mention_in_group=false")
 	}
-	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:group:oc_1" {
-		t.Fatalf("metadata=%#v, want scoped group chat session", incoming.Metadata)
+	if incoming.SessionRouteKey() != "feishu:cli_a:tenant_1:group:oc_1" || !incoming.IsGroupSession() {
+		t.Fatalf("route=%#v, want scoped group chat session", incoming.Route)
 	}
 }
 

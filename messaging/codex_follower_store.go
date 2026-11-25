@@ -38,6 +38,7 @@ func codexFollowerFromAcquire(req codexSessionAcquireRequest) (*codexFrontendFol
 		ActorUserID:        firstNonBlank(req.actorUserID, req.routeUserID),
 		AuthorizedIdentity: authorizedIdentity,
 		DeliveryRoute:      route,
+		RouteIsGroup:       req.routeIsGroup,
 		UpdatedAt:          time.Now().UTC().Format(time.RFC3339),
 	})
 	return follower, follower != nil

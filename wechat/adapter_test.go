@@ -2,6 +2,7 @@ package wechat
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -192,5 +193,107 @@ func TestAdapterDoesNotPersistUnauthorizedContextToken(t *testing.T) {
 	}
 	if _, err := os.Stat(contextTokenStorePath("bot-1")); !os.IsNotExist(err) {
 		t.Fatalf("unauthorized token file stat error=%v, want not exist", err)
+	}
+}
+
+func TestAdapterDownloadsAuthorizedCDNAttachmentAndCleansTempFile(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	adapter := NewAdapter(&ilink.Credentials{ILinkBotID: "bot-a"})
+	adapter.SetAccessControl(platform.NewAccessControl([]string{"user-1"}))
+	downloaded := false
+	adapter.downloadCDN = func(_ context.Context, queryParam string, aesKey string) ([]byte, error) {
+		downloaded = true
+		if queryParam != "enc-param" || aesKey != "aes-key" {
+			t.Fatalf("download args=(%q,%q)", queryParam, aesKey)
+		}
+		return []byte("微信附件正文"), nil
+	}
+	client := ilink.NewClient(&ilink.Credentials{ILinkBotID: "bot-a"})
+	var tempPath string
+	handler := adapter.handleWeixinMessage(func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+		if msg.AccountID != "bot-a" || msg.SessionRouteKey() != "wechat:bot-a:user-1" {
+			t.Fatalf("routing=(%q,%q), want bot-a route", msg.AccountID, msg.SessionRouteKey())
+		}
+		if len(msg.Attachments) != 1 {
+			t.Fatalf("attachments=%#v, want 1", msg.Attachments)
+		}
+		att := msg.Attachments[0]
+		if att.Path == "" || att.Metadata["temporary"] != "true" {
+			t.Fatalf("attachment=%#v, want temporary staged path", att)
+		}
+		if att.Metadata["encrypt_query_param"] != "" || att.Metadata["aes_key"] != "" {
+			t.Fatalf("attachment=%#v, CDN parameters must not leak to messaging layer", att)
+		}
+		data, err := os.ReadFile(att.Path)
+		if err != nil || string(data) != "微信附件正文" {
+			t.Fatalf("read staged file=%q err=%v", string(data), err)
+		}
+		info, err := os.Stat(att.Path)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("staged file mode=%v err=%v, want 0600", info.Mode(), err)
+		}
+		tempPath = att.Path
+	})
+
+	handler(context.Background(), client, ilink.WeixinMessage{
+		MessageID:    77,
+		FromUserID:   "user-1",
+		MessageType:  ilink.MessageTypeUser,
+		MessageState: ilink.MessageStateFinish,
+		ItemList: []ilink.MessageItem{{
+			Type: ilink.ItemTypeFile,
+			FileItem: &ilink.FileItem{
+				FileName: "report.txt",
+				Media:    &ilink.MediaInfo{EncryptQueryParam: "enc-param", AESKey: "aes-key"},
+			},
+		}},
+	})
+
+	if !downloaded || tempPath == "" {
+		t.Fatalf("downloaded=%v tempPath=%q", downloaded, tempPath)
+	}
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("unconsumed temp attachment %q should be cleaned up, stat err=%v", tempPath, err)
+	}
+}
+
+func TestAdapterSkipsCDNDownloadForUnauthorizedUserAndRecordsFailure(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	adapter := NewAdapter(&ilink.Credentials{ILinkBotID: "bot-a"})
+	adapter.SetAccessControl(platform.NewAccessControl([]string{"allowed-user"}))
+	adapter.downloadCDN = func(context.Context, string, string) ([]byte, error) {
+		t.Fatal("unauthorized user must not trigger CDN download")
+		return nil, nil
+	}
+	client := ilink.NewClient(&ilink.Credentials{ILinkBotID: "bot-a"})
+	handler := adapter.handleWeixinMessage(func(context.Context, platform.IncomingMessage, platform.Replier) {})
+	handler(context.Background(), client, ilink.WeixinMessage{
+		MessageID: 78, FromUserID: "stranger", ToUserID: "bot-a",
+		MessageType: ilink.MessageTypeUser, MessageState: ilink.MessageStateFinish,
+		ItemList: []ilink.MessageItem{{
+			Type:     ilink.ItemTypeFile,
+			FileItem: &ilink.FileItem{FileName: "a.txt", Media: &ilink.MediaInfo{EncryptQueryParam: "p", AESKey: "k"}},
+		}},
+	})
+
+	adapter.downloadCDN = func(context.Context, string, string) ([]byte, error) {
+		return nil, errors.New("cdn unavailable")
+	}
+	var gotErr string
+	handler = adapter.handleWeixinMessage(func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+		if len(msg.Attachments) == 1 {
+			gotErr = msg.Attachments[0].Metadata["download_error"]
+		}
+	})
+	handler(context.Background(), client, ilink.WeixinMessage{
+		MessageID: 79, FromUserID: "allowed-user", ToUserID: "bot-a",
+		MessageType: ilink.MessageTypeUser, MessageState: ilink.MessageStateFinish,
+		ItemList: []ilink.MessageItem{{
+			Type:     ilink.ItemTypeFile,
+			FileItem: &ilink.FileItem{FileName: "a.txt", Media: &ilink.MediaInfo{EncryptQueryParam: "p", AESKey: "k"}},
+		}},
+	})
+	if gotErr != "cdn unavailable" {
+		t.Fatalf("download_error=%q, want cdn unavailable", gotErr)
 	}
 }

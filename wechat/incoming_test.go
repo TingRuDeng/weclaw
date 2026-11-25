@@ -24,11 +24,25 @@ func TestIncomingFromWeixinText(t *testing.T) {
 	if got.Platform != platform.PlatformWeChat || got.AccountID != "bot-1" || got.UserID != "user-1" || got.ChatID != "user-1" {
 		t.Fatalf("unexpected routing fields: %#v", got)
 	}
+	if got.SessionRouteKey() != "wechat:bot-1:user-1" || got.IsGroupSession() {
+		t.Fatalf("Route=%#v, want wechat:bot-1:user-1 DM route", got.Route)
+	}
 	if got.MessageID != "42" || got.Text != "hello" || got.ContextToken != "ctx-1" {
 		t.Fatalf("unexpected content fields: %#v", got)
 	}
 	if got.ConversationKey() != "wechat:user-1" {
 		t.Fatalf("ConversationKey=%q, want wechat:user-1", got.ConversationKey())
+	}
+}
+
+func TestIncomingFromWeixinIsolatesMultiAccountRoutes(t *testing.T) {
+	first := IncomingFromWeixin(ilink.WeixinMessage{MessageID: 1, FromUserID: "user-1", ToUserID: "bot-a"})
+	second := IncomingFromWeixin(ilink.WeixinMessage{MessageID: 2, FromUserID: "user-1", ToUserID: "bot-b"})
+	if first.SessionRouteKey() != "wechat:bot-a:user-1" || second.SessionRouteKey() != "wechat:bot-b:user-1" {
+		t.Fatalf("routes=(%q,%q), want account-scoped routes", first.SessionRouteKey(), second.SessionRouteKey())
+	}
+	if first.SessionRouteKey() == second.SessionRouteKey() {
+		t.Fatalf("same user on different WeChat accounts must not share route: %q", first.SessionRouteKey())
 	}
 }
 

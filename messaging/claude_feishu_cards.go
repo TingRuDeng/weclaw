@@ -22,16 +22,16 @@ type claudeFeishuChoiceRequest struct {
 	AccountID     string
 	Reply         platform.Replier
 	Route         claudeSessionRoute
-	Metadata      map[string]string
+	ChoiceRoute   platform.SessionRoute
 	WorkspaceRoot string
 	Page          int
 	Snapshot      string
 }
 
 type claudeChoiceCard struct {
-	Prompt  string
-	Choices []platform.Choice
-	Meta    map[string]string
+	Prompt      string
+	Choices     []platform.Choice
+	ChoiceRoute platform.SessionRoute
 }
 
 // handleFeishuClaudeSessionCommand 将飞书侧 Claude 导航命令渲染为两级按钮卡片。
@@ -122,7 +122,7 @@ func (h *Handler) sendFeishuClaudeNavigationChoices(req claudeFeishuCommandReque
 	}
 	choiceReq := claudeFeishuChoiceRequest{
 		Context: req.Context, AccountID: msg.AccountID, Reply: req.Reply, Route: route,
-		Metadata: feishuChoiceSessionMetadata(msg, req.RouteUserID), Snapshot: feishuNavigationSnapshotFromMessage(msg),
+		ChoiceRoute: platformMessageChoiceRoute(msg, req.RouteUserID), Snapshot: feishuNavigationSnapshotFromMessage(msg),
 	}
 	if page, ok := parseFeishuNavigationPage(fields, "/cc"); ok {
 		choiceReq.Page = page.Page
@@ -170,8 +170,9 @@ func (h *Handler) sendFeishuClaudeWorkspaceChoices(req claudeFeishuChoiceRequest
 	}
 	choices = appendFeishuPageNavigation(choices, "/cc", "workspaces", page, snapshot)
 	card := claudeChoiceCard{
-		Prompt:  feishuPaginatedPrompt("Claude 工作空间\n请选择要进入的工作空间。", page),
-		Choices: choices, Meta: req.Metadata,
+		Prompt:      feishuPaginatedPrompt("Claude 工作空间\n请选择要进入的工作空间。", page),
+		Choices:     choices,
+		ChoiceRoute: req.ChoiceRoute,
 	}
 	return h.askFeishuClaudeChoices(req.Context, req.Reply, card)
 }
@@ -219,7 +220,7 @@ func (h *Handler) sendFeishuClaudeSessionChoices(req claudeFeishuChoiceRequest) 
 	prompt := feishuPaginatedPrompt(
 		fmt.Sprintf("%s 会话\n请选择要切换的会话。", shortCodexWorkspaceName(req.WorkspaceRoot)), page,
 	)
-	return h.askFeishuClaudeChoices(req.Context, req.Reply, claudeChoiceCard{Prompt: prompt, Choices: choices, Meta: req.Metadata})
+	return h.askFeishuClaudeChoices(req.Context, req.Reply, claudeChoiceCard{Prompt: prompt, Choices: choices, ChoiceRoute: req.ChoiceRoute})
 }
 
 func (h *Handler) loadFeishuClaudeSessionSnapshot(req claudeFeishuChoiceRequest, scope feishuNavigationSnapshotScope) ([]platform.Choice, string, bool) {
@@ -254,7 +255,7 @@ func (h *Handler) askFeishuClaudeChoices(ctx context.Context, reply platform.Rep
 	if len(card.Choices) == 0 {
 		return false
 	}
-	if err := reply.AskChoices(ctx, card.Prompt, platformChoicesWithMetadata(card.Choices, card.Meta)); err != nil {
+	if err := reply.AskChoices(ctx, card.Prompt, platformChoicesWithRoute(card.Choices, card.ChoiceRoute)); err != nil {
 		log.Printf("[handler] failed to send feishu claude choices: %v", err)
 		return false
 	}

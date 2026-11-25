@@ -3,7 +3,27 @@ package messaging
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/fastclaw-ai/weclaw/platform"
 )
+
+// isWeChatUserRoute 判断 routeUserID 是否属于指定微信发送者的私聊路由（兼容旧单账号与多账号格式）。
+func isWeChatUserRoute(routeUserID string, actorUserID string) bool {
+	routeUserID = strings.TrimSpace(routeUserID)
+	actorUserID = strings.TrimSpace(actorUserID)
+	prefix := string(platform.PlatformWeChat) + ":"
+	if routeUserID == "" || actorUserID == "" || !strings.HasPrefix(routeUserID, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(routeUserID, prefix)
+	if rest == actorUserID {
+		return true
+	}
+	if idx := strings.IndexByte(rest, ':'); idx > 0 && rest[idx+1:] == actorUserID {
+		return true
+	}
+	return false
+}
 
 func codexBindingKey(userID string, agentName string) string {
 	return normalizeConversationUserKey(userID) + "\x00" + strings.TrimSpace(agentName)

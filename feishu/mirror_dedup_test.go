@@ -181,7 +181,7 @@ func (r *dispatchRecorder) requireSessionEquals(t *testing.T, value string) {
 	if len(r.seen) == 0 {
 		t.Fatal("no dispatched message")
 	}
-	session := r.seen[0].Metadata[feishuSessionMetadataKey]
+	session := r.seen[0].SessionRouteKey()
 	if session != value {
 		t.Fatalf("session=%q, want %q", session, value)
 	}

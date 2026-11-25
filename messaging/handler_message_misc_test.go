@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -114,19 +115,28 @@ func TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent(t *testing.T) {
 	ag := &fakeAgent{reply: "已分析"}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
-	h.cdnDownloader = func(_ context.Context, queryParam string, aesKey string) ([]byte, error) {
-		if queryParam != "download-param" || aesKey != "aes-key" {
-			t.Fatalf("download args=(%q,%q), want download-param/aes-key", queryParam, aesKey)
-		}
-		return []byte("文件内容"), nil
-	}
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeOff
 	h.SetProgressConfig(cfg)
-	client, _, closeServer := newRecordingILinkClient(t)
-	defer closeServer()
-
-	handleTestWeChatMessage(h, context.Background(), client, newFileMessage(10, "方案.txt"))
+	stagedPath := filepath.Join(t.TempDir(), "staged-wechat-file.tmp")
+	if err := os.WriteFile(stagedPath, []byte("文件内容"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformWeChat,
+		AccountID: "bot-1",
+		UserID:    "user-1",
+		ChatID:    "user-1",
+		Route:     platform.SessionRoute{Key: "wechat:bot-1:user-1"},
+		MessageID: "10",
+		Attachments: []platform.Attachment{{
+			Kind:     platform.AttachmentFile,
+			Path:     stagedPath,
+			FileName: "方案.txt",
+			Metadata: map[string]string{"temporary": "true"},
+		}},
+	}, reply)
 
 	waitForFakeAgentCalls(t, ag, 1)
 	if ag.chatCallCount() != 1 {
@@ -143,6 +153,9 @@ func TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent(t *testing.T) {
 	}
 	if _, err := os.Stat(extractSavedPathFromAgentMessage(ag.lastChatMessage())); err != nil {
 		t.Fatalf("saved file missing: %v", err)
+	}
+	if _, err := os.Stat(stagedPath); !os.IsNotExist(err) {
+		t.Fatalf("temporary staged attachment should be removed after saving, err=%v", err)
 	}
 }
 

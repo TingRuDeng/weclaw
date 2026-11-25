@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ type Adapter struct {
 	creds             *ilink.Credentials
 	client            *ilink.Client
 	newMonitor        func(*ilink.Client, ilink.MessageHandler) (monitorRunner, error)
+	downloadCDN       func(ctx context.Context, encryptQueryParam string, aesKey string) ([]byte, error)
 	watchdogInterval  time.Duration
 	watchdogMaxIdle   time.Duration
 	aggregationWindow time.Duration
@@ -42,6 +44,7 @@ func NewAdapter(creds *ilink.Credentials) *Adapter {
 		creds:             creds,
 		client:            ilink.NewClient(creds),
 		newMonitor:        newIlinkMonitor,
+		downloadCDN:       DownloadFileFromCDN,
 		watchdogInterval:  wechatWatchdogInterval,
 		watchdogMaxIdle:   wechatWatchdogMaxIdle,
 		aggregationWindow: 800 * time.Millisecond,
@@ -130,9 +133,31 @@ func (a *Adapter) handleWeixinMessage(dispatch platform.DispatchFunc) ilink.Mess
 				log.Printf("[wechat] failed to persist context_token for %s: %v", msg.FromUserID, err)
 			}
 		}
+		incoming := IncomingFromWeixin(msg)
+		if incoming.AccountID == "" {
+			if accountID := strings.TrimSpace(client.BotID()); accountID != "" {
+				incoming.AccountID = accountID
+				incoming.Route = platform.SessionRoute{Key: BuildWeixinSessionKey(accountID, incoming.UserID)}
+			}
+		}
+		if a.attachmentDownloadAllowed(incoming.UserID) {
+			a.attachIncomingMedia(ctx, &incoming)
+		}
+		defer cleanupTemporaryAttachments(incoming.Attachments)
 		reply := NewReplier(client, msg.FromUserID, msg.ContextToken, "")
-		dispatch(ctx, IncomingFromWeixin(msg), reply)
+		dispatch(ctx, incoming, reply)
 	}
+}
+
+func (a *Adapter) attachmentDownloadAllowed(userID string) bool {
+	if a == nil {
+		return false
+	}
+	a.accessMu.RLock()
+	access := a.access
+	accessSet := a.accessSet
+	a.accessMu.RUnlock()
+	return !accessSet || access.Allowed(userID)
 }
 
 func (a *Adapter) contextTokenPersistenceAllowed(userID string) bool {

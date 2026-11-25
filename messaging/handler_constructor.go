@@ -54,8 +54,3 @@ func newHandler(factory AgentFactoryWithError, saveDefault SaveDefaultFunc) *Han
 		startedAt:               time.Now(),
 	}
 }
-
-// SetCDNDownloader 注入平台入站附件下载能力；应在开始接收消息前调用。
-func (h *Handler) SetCDNDownloader(downloader CDNDownloader) {
-	h.cdnDownloader = downloader
-}

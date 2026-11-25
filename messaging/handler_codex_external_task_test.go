@@ -107,7 +107,7 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(160, "/cx cd weclaw"))
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(161, "/cx switch 1"))
 
-	key := buildCodexConversationID("user-1", "codex", workspace)
+	key := buildCodexConversationID(testWeChatRoute, "codex", workspace)
 	task, ok := h.activeTask(key)
 	if !ok {
 		t.Fatal("切换 active Codex App thread 后应登记外部任务镜像")

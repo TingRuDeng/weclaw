@@ -170,16 +170,17 @@ func approvalDisplayText(value string) string {
 	return value
 }
 
-func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string, ownerUserID string, routeUserID string, agentName string) []platform.Choice {
+func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string, ownerUserID string, routeUserID string, routeIsGroup bool, agentName string) []platform.Choice {
 	choices := make([]platform.Choice, 0, len(options))
+	route := choiceSessionRouteForInteraction(routeUserID, routeIsGroup)
 	for _, option := range options {
 		id := strings.TrimSpace(option.ID)
 		if id == "" {
 			continue
 		}
-		choice := platform.Choice{ID: id, Label: approvalChoiceLabel(option)}
+		choice := platform.Choice{ID: id, Label: approvalChoiceLabel(option), Route: route}
 		metadata := approvalChoiceMetadata(
-			approvalKey, taskCardID, ownerUserID, routeUserID,
+			approvalKey, taskCardID, ownerUserID,
 			agentName, platform.ChoiceInteractionApproval,
 		)
 		if len(metadata) > 0 {
@@ -200,8 +201,8 @@ func approvalChoiceForDecision(choices []platform.Choice, decision string) (plat
 	return platform.Choice{}, false
 }
 
-func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID string, routeUserID string, agentName string, interactionKind string) map[string]string {
-	metadata := make(map[string]string, 6)
+func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID string, agentName string, interactionKind string) map[string]string {
+	metadata := make(map[string]string, 5)
 	if approvalKey = strings.TrimSpace(approvalKey); approvalKey != "" {
 		metadata["approval_key"] = approvalKey
 	}
@@ -210,9 +211,6 @@ func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID s
 	}
 	if ownerUserID = strings.TrimSpace(ownerUserID); ownerUserID != "" {
 		metadata["approval_owner"] = ownerUserID
-	}
-	if sessionKey := feishuSessionKeyFromRoute(routeUserID); sessionKey != "" {
-		metadata[feishuSessionMetadataKey] = sessionKey
 	}
 	if agentName = strings.TrimSpace(agentName); agentName != "" {
 		metadata[platform.ChoiceMetadataAgentName] = agentDisplayName(agentName)

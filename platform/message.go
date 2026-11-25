@@ -50,12 +50,18 @@ func (m IncomingMessage) AuthorizedIdentity() (string, bool) {
 
 // SessionRoute 是平台 adapter 解析出的稳定会话路由；它与真实发送者 UserID 分离。
 type SessionRoute struct {
-	Key string
+	Key     string
+	IsGroup bool
 }
 
 // SessionRouteKey 返回规范化后的会话路由 key。
 func (m IncomingMessage) SessionRouteKey() string {
 	return strings.TrimSpace(m.Route.Key)
+}
+
+// IsGroupSession 返回当前消息是否属于群聊会话。
+func (m IncomingMessage) IsGroupSession() bool {
+	return m.Route.IsGroup
 }
 
 // UserIdentityKeys 返回可用于访问控制的用户身份，保留 UserID 作为主身份。

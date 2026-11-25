@@ -187,6 +187,31 @@ func TestBuildChoiceCardUsesFeishuSessionMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildChoiceCardUsesFirstClassChoiceRouteAndGroupFlag(t *testing.T) {
+	cardJSON, err := buildChoiceCard("请选择工作空间", []platform.Choice{{
+		ID:    "/cx cd 0",
+		Label: "weclaw",
+		Route: platform.SessionRoute{Key: "feishu:tenant_1:custom:oc_1", IsGroup: true},
+	}}, "feishu:ou_user")
+	if err != nil {
+		t.Fatalf("buildChoiceCard error: %v", err)
+	}
+	card := decodeCardJSON(t, cardJSON)
+	elements := card["body"].(map[string]any)["elements"].([]any)
+	value := elements[1].(map[string]any)["value"].(map[string]any)
+	if value[feishuSessionMetadataKey] != "feishu:tenant_1:custom:oc_1" || value[feishuSessionGroupValueKey] != "1" {
+		t.Fatalf("button value=%#v, want serialized route and structured group flag", value)
+	}
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+		Operator: &callback.Operator{OpenID: "ou_user"},
+		Action:   &callback.CallBackAction{Value: value},
+	}}
+	action, ok := parseCardAction(event)
+	if !ok || action.SessionKey != "feishu:tenant_1:custom:oc_1" || !action.SessionGroup {
+		t.Fatalf("action=%#v ok=%v, want parsed group route without substring heuristic", action, ok)
+	}
+}
+
 func TestBuildChoiceCardDoesNotMarkNormalChoicesAsApproval(t *testing.T) {
 	cardJSON, err := buildChoiceCard("请选择工作空间", []platform.Choice{{ID: "/cx cd 0", Label: "weclaw"}}, "feishu:ou_user")
 	if err != nil {

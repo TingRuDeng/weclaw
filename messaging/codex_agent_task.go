@@ -31,7 +31,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		agentCtx, detachCodexObserver = agent.ContextWithCodexObserverDetach(agentCtx)
 	}
 	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
-		actorUserID: opts.userID, routeUserID: opts.routeUserID,
+		actorUserID: opts.userID, routeUserID: opts.routeUserID, routeIsGroup: opts.routeIsGroup,
 		agentName: opts.agentName, reply: opts.reply, lease: interactionLease,
 	})
 	route := opts.route
@@ -77,7 +77,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		cancelTaskTimeout()
 		h.replyAgentTaskAdmission(agentTaskAdmissionNotice{
 			ctx: opts.ctx, platformName: opts.platform, accountID: opts.accountID,
-			reply: opts.reply, userID: opts.userID, routeUserID: opts.routeUserID,
+			reply: opts.reply, userID: opts.userID, routeUserID: opts.routeUserID, routeIsGroup: opts.routeIsGroup,
 			agentName: opts.agentName, executionKey: executionKey, task: admission.task, guideSupported: true,
 		}, admission.status)
 		return

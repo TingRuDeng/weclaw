@@ -48,8 +48,8 @@ func TestHandleCodexNewRuntimeFailureClearsMappingWithoutPreviousThread(t *testi
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(124, "/cx new"))
 
-	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
-	wantConversation := buildCodexConversationID("user-1", "codex", workspace)
+	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey(testWeChatRoute, "codex"), workspace)
+	wantConversation := buildCodexConversationID(testWeChatRoute, "codex", workspace)
 	if ag.clearCalledWith != wantConversation || ag.threadID != "" || thread != "" || pending {
 		t.Fatalf("mapping clear=%q runtime=%q store=(%q,%v)", ag.clearCalledWith, ag.threadID, thread, pending)
 	}
@@ -79,9 +79,9 @@ func assertCodexCreateRuntimeFailureKeepsPreviousWrite(t *testing.T, h *Handler,
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeOff
-	conversationID := buildCodexConversationID("user-1", "codex", workspace)
+	conversationID := buildCodexConversationID(testWeChatRoute, "codex", workspace)
 	opts := codexAgentTaskOptions{
-		ctx: context.Background(), userID: "user-1", routeUserID: "user-1",
+		ctx: context.Background(), userID: "user-1", routeUserID: testWeChatRoute,
 		reply: reply, agentName: "codex", message: "继续任务", agent: ag, progressCfg: cfg,
 		route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID, threadID: "thread-old"},
 	}
@@ -102,11 +102,11 @@ func TestCreateAndAcquireCodexSessionRestoresAfterHardFailureWithCanceledParent(
 	h.ensureCodexSessions().SetFilePath(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	conversationID := buildCodexConversationID("user-1", "codex", workspace)
+	conversationID := buildCodexConversationID(testWeChatRoute, "codex", workspace)
 
 	_, err := h.createAndAcquireCodexSessionWithBindingLocked(codexSessionCreateRequest{
 		acquire: codexSessionAcquireRequest{
-			ctx: ctx, actorUserID: "user-1", routeUserID: "user-1", agentName: "codex", agent: ag,
+			ctx: ctx, actorUserID: "user-1", routeUserID: testWeChatRoute, agentName: "codex", agent: ag,
 			route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID},
 		},
 	})
@@ -126,11 +126,11 @@ func TestCreateAndAcquireCodexSessionResetFailureRestoresWithCanceledParent(t *t
 	ag.rejectCanceledUse = true
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	conversationID := buildCodexConversationID("user-1", "codex", workspace)
+	conversationID := buildCodexConversationID(testWeChatRoute, "codex", workspace)
 
 	_, err := h.createAndAcquireCodexSessionWithBindingLocked(codexSessionCreateRequest{
 		acquire: codexSessionAcquireRequest{
-			ctx: ctx, actorUserID: "user-1", routeUserID: "user-1", agentName: "codex", agent: ag,
+			ctx: ctx, actorUserID: "user-1", routeUserID: testWeChatRoute, agentName: "codex", agent: ag,
 			route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID},
 		},
 	})
@@ -149,11 +149,11 @@ func TestCreateAndAcquireCodexSessionDesktopCapabilityFailureKeepsExistingMappin
 	ag.resetSessionID = ""
 	ag.resetErr = agent.ErrCodexDesktopCapabilityUnavailable
 	ag.resetKeepsMapping = true
-	conversationID := buildCodexConversationID("user-1", "codex", workspace)
+	conversationID := buildCodexConversationID(testWeChatRoute, "codex", workspace)
 
 	_, err := h.createAndAcquireCodexSessionWithBindingLocked(codexSessionCreateRequest{
 		acquire: codexSessionAcquireRequest{
-			ctx: context.Background(), actorUserID: "user-1", routeUserID: "user-1", agentName: "codex", agent: ag,
+			ctx: context.Background(), actorUserID: "user-1", routeUserID: testWeChatRoute, agentName: "codex", agent: ag,
 			route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID},
 		},
 	})
@@ -211,7 +211,7 @@ func newCodexCreateFailureFixture(t *testing.T) (*Handler, *fakeCodexSessionCrea
 	ag.fakeCodexThreadAgent.threadID = "thread-old"
 	h.defaultName, h.agents["codex"] = "codex", ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-old")
 	return h, ag, workspace, bindingKey
 }

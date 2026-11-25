@@ -12,11 +12,12 @@ import (
 )
 
 type agentInteractionContextOptions struct {
-	actorUserID string
-	routeUserID string
-	agentName   string
-	reply       platform.Replier
-	lease       *agentInteractionLease
+	actorUserID  string
+	routeUserID  string
+	routeIsGroup bool
+	agentName    string
+	reply        platform.Replier
+	lease        *agentInteractionLease
 }
 
 type agentInteractionLease struct {
@@ -266,12 +267,13 @@ func userInputOptionLabel(option agent.UserInputOption) string {
 
 func userInputPlatformChoices(options []agent.ApprovalOption, key string, opts agentInteractionContextOptions) []platform.Choice {
 	choices := make([]platform.Choice, 0, len(options))
+	route := choiceSessionRouteForInteraction(opts.routeUserID, opts.routeIsGroup)
 	metadata := approvalChoiceMetadata(
-		key, taskCardIDFromReplier(opts.reply), opts.actorUserID, opts.routeUserID,
+		key, taskCardIDFromReplier(opts.reply), opts.actorUserID,
 		opts.agentName, platform.ChoiceInteractionUserInput,
 	)
 	for _, option := range options {
-		choices = append(choices, platform.Choice{ID: option.ID, Label: option.Name, Metadata: metadata})
+		choices = append(choices, platform.Choice{ID: option.ID, Label: option.Name, Route: route, Metadata: metadata})
 	}
 	return choices
 }

@@ -178,8 +178,11 @@ func TestFeishuHelpChoicesCarrySessionMetadata(t *testing.T) {
 		t.Fatalf("choices=%#v, want help choice card", reply.Choices)
 	}
 	for _, choice := range reply.Choices[0].Choices {
-		if choice.Metadata["feishu_session_key"] != sessionKey {
-			t.Fatalf("choice=%#v, want feishu session metadata %q", choice, sessionKey)
+		if choice.Route.Key != sessionKey || !choice.Route.IsGroup {
+			t.Fatalf("choice=%#v, want feishu first-class group route %q", choice, sessionKey)
+		}
+		if _, duplicated := choice.Metadata["feishu_session_key"]; duplicated {
+			t.Fatalf("choice=%#v, should not duplicate feishu_session_key in metadata", choice)
 		}
 	}
 }

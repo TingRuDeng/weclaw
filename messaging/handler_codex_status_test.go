@@ -30,13 +30,13 @@ func TestCodexStatusKeepsFreshRemoteThreadBeforeFirstTurn(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(136, "/cx new"))
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(137, "/cx status"))
 
-	bindingKey := codexBindingKey("user-1", "codex")
+	bindingKey := codexBindingKey(testWeChatRoute, "codex")
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 	if threadID != "thread-new" || pending {
 		t.Fatalf("status cleared fresh remote thread=%q pending=%v, messages=%#v", threadID, pending, calls.texts())
 	}
 	if _, err := h.resolveCodexConversationIDForRoute(
-		context.Background(), "user-1", "user-1", "codex", ag,
+		context.Background(), "user-1", testWeChatRoute, "codex", ag,
 	); err != nil {
 		t.Fatalf("first message should keep using fresh remote thread: %v", err)
 	}

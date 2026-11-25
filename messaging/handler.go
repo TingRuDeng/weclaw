@@ -26,9 +26,6 @@ type AgentFactoryWithError func(ctx context.Context, name string) (agent.Agent, 
 // SaveDefaultFunc persists the default agent name to config file.
 type SaveDefaultFunc func(name string) error
 
-// CDNDownloader 用于下载微信 CDN 中的入站文件，便于测试注入。
-type CDNDownloader func(ctx context.Context, encryptQueryParam string, aesKey string) ([]byte, error)
-
 // ProgressChatAgent 支持在聊天过程中输出增量内容。
 type ProgressChatAgent interface {
 	ChatWithProgress(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error)
@@ -67,7 +64,6 @@ type Handler struct {
 	agentErrors              atomic.Int64
 	lastDedupCleanup         atomic.Int64
 	seenMsgs                 sync.Map // map[int64]time.Time — dedup by message_id
-	cdnDownloader            CDNDownloader
 	progressConfig           config.ProgressConfig
 	agentProgressConfigs     map[string]config.ProgressConfig
 	platformProgressConfigs  map[string]config.ProgressConfig
@@ -200,7 +196,8 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 	runtime := platformMessageRuntime{
 		ctx: ctx,
 		msg: msg, reply: replyWriter, routeUserID: routeUserID,
-		text: strings.TrimSpace(platformMessageText(msg)), trace: trace,
+		routeIsGroup: platformMessageIsGroup(msg, routeUserID),
+		text:         strings.TrimSpace(platformMessageText(msg)), trace: trace,
 	}
 	if h.handlePlatformRawCommand(runtime) {
 		return
