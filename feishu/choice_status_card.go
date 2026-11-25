@@ -194,6 +194,8 @@ func choiceCommandSucceeded(content string) bool {
 		"切换成功",
 		"已进入工作空间并绑定",
 		"当前已经是目标 Codex 账号",
+		"已创建并绑定",
+		"已解除当前窗口",
 	} {
 		if strings.Contains(content, marker) {
 			return true

@@ -1,0 +1,7 @@
+{
+  "display_name": "WeClaw",
+  "description": "把 Antigravity 桌面会话与 WeClaw 飞书私聊桥接",
+  "command": "weclaw",
+  "args": ["ag-sidecar"],
+  "restart_policy": "always"
+}

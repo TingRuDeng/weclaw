@@ -15,6 +15,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/api"
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/ilink"
+	"github.com/fastclaw-ai/weclaw/internal/antigravity"
 	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -110,6 +111,11 @@ func runForegroundStart(cfg *config.Config) error {
 	}
 	traceStore := newStartTraceStore()
 	handler := newStartHandlerWithTrace(cfg, traceStore)
+	if agClient, err := antigravity.NewClient(""); err != nil {
+		log.Printf("Antigravity sidecar client unavailable: %v", err)
+	} else {
+		handler.SetAntigravityClient(agClient)
+	}
 	backgroundStarts := make([]<-chan struct{}, 0, 2)
 	defer func() {
 		cancel()
@@ -526,6 +532,9 @@ func (runtime startRuntime) runUntilShutdown(signals <-chan os.Signal) error {
 	}
 	if runtime.cancel != nil {
 		runtime.cancel()
+	}
+	if runtime.handler != nil {
+		runtime.handler.StopAntigravityObservers()
 	}
 	if bridgeFinished {
 		return bridgeErr

@@ -112,11 +112,12 @@ func TestFeishuHelpSendsAuthorizedChoiceCard(t *testing.T) {
 		t.Fatalf("prompt=%q, want help title", got.Prompt)
 	}
 	wants := map[string]string{
-		"/help common":   "常用与任务",
-		"/help codex":    "Codex",
-		"/help claude":   "Claude",
-		"/help settings": "设置与进度",
-		"/help manage":   "管理",
+		"/help common":      "常用与任务",
+		"/help codex":       "Codex",
+		"/help claude":      "Claude",
+		"/help antigravity": "Antigravity",
+		"/help settings":    "设置与进度",
+		"/help manage":      "管理",
 	}
 	if len(got.Choices) != len(wants) {
 		t.Fatalf("choices=%#v, want %d entries", got.Choices, len(wants))
