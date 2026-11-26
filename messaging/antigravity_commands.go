@@ -139,13 +139,17 @@ func (h *Handler) renderAntigravityNavigation(ctx context.Context, msg platform.
 		return
 	}
 	var rendered []platform.Choice
+	var pageInfo feishuChoicePage
 	var prompt string
 	if view.Mode == antigravityNavModeProjects {
-		rendered = antigravityProjectChoices(choices, view.Page)
-		prompt = "Antigravity\n请选择项目。"
+		rendered, pageInfo = antigravityProjectChoices(choices, view.Page)
+		prompt = feishuPaginatedPrompt("Antigravity 项目\n请选择要进入的项目。", pageInfo)
 	} else {
-		rendered = antigravitySessionChoices(choices, view.ProjectID, view.Page)
-		prompt = "Antigravity · " + antigravityProjectNameFromChoices(choices, view.ProjectID) + "\n请选择会话。"
+		rendered, pageInfo = antigravitySessionChoices(choices, view.ProjectID, view.Page)
+		prompt = feishuPaginatedPrompt(
+			fmt.Sprintf("%s 会话\n请选择要切换的会话。", antigravityProjectNameFromChoices(choices, view.ProjectID)),
+			pageInfo,
+		)
 	}
 	rendered = platformChoicesWithRoute(rendered, platformMessageChoiceRoute(msg, routeUserID))
 	if err := reply.AskChoices(ctx, prompt, rendered); err != nil {
@@ -154,7 +158,7 @@ func (h *Handler) renderAntigravityNavigation(ctx context.Context, msg platform.
 	}
 }
 
-func antigravityProjectChoices(choices []platform.Choice, page int) []platform.Choice {
+func antigravityProjectChoices(choices []platform.Choice, page int) ([]platform.Choice, feishuChoicePage) {
 	type projectBucket struct {
 		id string
 	}
@@ -185,30 +189,30 @@ func antigravityProjectChoices(choices []platform.Choice, page int) []platform.C
 	return antigravityPaginate(items, page, true)
 }
 
-func antigravitySessionChoices(choices []platform.Choice, projectID string, page int) []platform.Choice {
+func antigravitySessionChoices(choices []platform.Choice, projectID string, page int) ([]platform.Choice, feishuChoicePage) {
 	items := make([]platform.Choice, 0, len(choices))
 	for _, choice := range choices {
 		if antigravityProjectToken(choice.Metadata["project_id"]) != antigravityProjectToken(antigravityProjectIDFromToken(projectID)) {
 			continue
 		}
-		label := choice.Label
-		if name := strings.TrimSpace(choice.Metadata["project_name"]); name != "" {
-			label = name + " · " + label
-		}
 		items = append(items, platform.Choice{
-			ID: choice.ID, Label: label,
+			ID: choice.ID, Label: choice.Label,
 			Metadata: mergeChoiceMetadata(choice.Metadata, nil),
 		})
 	}
-	return antigravityPaginate(items, page, true)
+	result, info := antigravityPaginate(items, page, true)
+	if antigravityProjectCount(choices) > 1 {
+		result = append(result, feishuNavigationChoice("/ag project ..", "← 返回上一级"))
+	}
+	return result, info
 }
 
-func antigravityPaginate(items []platform.Choice, page int, indexed bool) []platform.Choice {
+func antigravityPaginate(items []platform.Choice, page int, indexed bool) ([]platform.Choice, feishuChoicePage) {
 	pageItems, info := paginateFeishuChoices(items, page)
 	result := append([]platform.Choice(nil), pageItems...)
 	if indexed {
 		for index := range result {
-			result[index].Label = feishuIndexedChoiceLabel(index+1, result[index].Label)
+			result[index].Label = feishuIndexedChoiceLabel(index, result[index].Label)
 		}
 	}
 	if info.TotalPages > 1 {
@@ -219,7 +223,7 @@ func antigravityPaginate(items []platform.Choice, page int, indexed bool) []plat
 			result = append(result, feishuNavigationChoice(fmt.Sprintf("/ag page %d", info.Number+1), "下一页 →"))
 		}
 	}
-	return result
+	return result, info
 }
 
 func antigravityProjectNameFromChoices(choices []platform.Choice, projectID string) string {
@@ -255,6 +259,14 @@ func (h *Handler) handleAntigravityProject(ctx context.Context, msg platform.Inc
 	choices, ok := h.feishuNavSnapshots.load(view.Token, h.antigravityNavScope(msg, routeUserID))
 	if !ok {
 		sendPlatformText(ctx, reply, msg.UserID, "Antigravity 列表已过期，请发送 /ag ls 刷新。")
+		return
+	}
+	if fields[2] == ".." {
+		view.Mode = antigravityNavModeProjects
+		view.ProjectID = ""
+		view.Page = 1
+		h.setAntigravityNavView(msg.AccountID, routeUserID, view)
+		h.renderAntigravityNavigation(ctx, msg, routeUserID, reply, view)
 		return
 	}
 	projectID := antigravityProjectToken(fields[2])
@@ -335,7 +347,7 @@ func (h *Handler) handleAntigravitySwitchIndex(ctx context.Context, msg platform
 		return
 	}
 	if view.Mode == antigravityNavModeProjects {
-		items := antigravityProjectChoices(choices, view.Page)
+		items, _ := antigravityProjectChoices(choices, view.Page)
 		projects := make([]platform.Choice, 0, len(items))
 		for _, choice := range items {
 			if strings.HasPrefix(choice.ID, "/ag project ") {
@@ -354,12 +366,18 @@ func (h *Handler) handleAntigravitySwitchIndex(ctx context.Context, msg platform
 		h.renderAntigravityNavigation(ctx, msg, routeUserID, reply, view)
 		return
 	}
-	items := antigravitySessionChoices(choices, view.ProjectID, view.Page)
-	if index < 1 || index > len(items) {
+	items, _ := antigravitySessionChoices(choices, view.ProjectID, view.Page)
+	sessions := make([]platform.Choice, 0, len(items))
+	for _, choice := range items {
+		if strings.HasPrefix(choice.ID, "/ag switch ") {
+			sessions = append(sessions, choice)
+		}
+	}
+	if index < 1 || index > len(sessions) {
 		sendPlatformText(ctx, reply, msg.UserID, "编号不存在，请发送 /ag ls 刷新。")
 		return
 	}
-	conversationID := strings.TrimPrefix(items[index-1].ID, "/ag switch ")
+	conversationID := strings.TrimPrefix(sessions[index-1].ID, "/ag switch ")
 	h.bindAntigravityConversation(ctx, msg, routeUserID, reply, conversationID)
 }
 

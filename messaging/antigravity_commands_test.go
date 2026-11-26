@@ -85,6 +85,9 @@ func TestAntigravityListGroupsProjectsAndUsesSnapshot(t *testing.T) {
 	if strings.Join(projectIDs, ",") != "/ag project p1,/ag project p2" {
 		t.Fatalf("project choices = %v", projectIDs)
 	}
+	if !strings.HasPrefix(choices[0].choices[0].Label, "1. Project One") {
+		t.Fatalf("first project label = %q, want 1-based prefix", choices[0].choices[0].Label)
+	}
 
 	reply = runAntigravityCommand(t, h, client, msg, route, "/ag project p1")
 	choices = reply.snapshotChoices()
@@ -95,10 +98,21 @@ func TestAntigravityListGroupsProjectsAndUsesSnapshot(t *testing.T) {
 	for _, choice := range choices[0].choices {
 		sessionIDs = append(sessionIDs, choice.ID)
 	}
-	if strings.Join(sessionIDs, ",") != "/ag switch conv-a,/ag switch conv-b" {
+	if strings.Join(sessionIDs, ",") != "/ag switch conv-a,/ag switch conv-b,/ag project .." {
 		t.Fatalf("session choices = %v", sessionIDs)
 	}
+	if choices[0].choices[0].Label != "1. Alpha one" || choices[0].choices[1].Label != "2. Alpha two" {
+		t.Fatalf("session labels = %q, %q", choices[0].choices[0].Label, choices[0].choices[1].Label)
+	}
 
+	reply = runAntigravityCommand(t, h, client, msg, route, "/ag project ..")
+	choices = reply.snapshotChoices()
+	if len(choices) != 1 || len(choices[0].choices) != 2 || choices[0].choices[0].ID != "/ag project p1" {
+		t.Fatalf("back to projects = %+v", choices)
+	}
+
+	reply = runAntigravityCommand(t, h, client, msg, route, "/ag project p1")
+	_ = reply
 	reply = runAntigravityCommand(t, h, client, msg, route, "/ag 2")
 	binding, ok := h.antigravityBindingSnapshot(msg.AccountID, route)
 	if !ok || binding.conversationID != "conv-b" {

@@ -26,24 +26,57 @@ func TestConversationServiceClientSendsOfficialHeaders(t *testing.T) {
 		seen = append(seen, request.URL.Path)
 		switch request.URL.Path {
 		case "/product.v1.ConversationService/ListConversations":
-			_ = json.NewEncoder(writer).Encode(map[string]any{"conversations": []map[string]any{{
-				"id": "c1", "title": "One", "projectId": "p1", "parentConversationId": "parent", "archived": true,
-			}}})
+			var body map[string]any
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			if body["pageToken"] == "page-2" {
+				_ = json.NewEncoder(writer).Encode(map[string]any{"conversations": []map[string]any{{
+					"id":          "c-summary",
+					"metadata":    map[string]any{"projectId": "p2"},
+					"annotations": map[string]any{},
+					"state":       map[string]any{"summary": "Fallback summary title", "runState": "RUN_STATE_IDLE"},
+				}}})
+				return
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"conversations": []map[string]any{{
+					"id":          "c1",
+					"metadata":    map[string]any{"projectId": "p1", "parentConversationId": "parent"},
+					"annotations": map[string]any{"title": "One", "archived": true},
+					"state":       map[string]any{"summary": "ignored summary", "runState": "RUN_STATE_RUNNING"},
+				}},
+				"nextPageToken": "page-2",
+			})
 		case "/product.v1.ConversationService/GetConversation":
-			_ = json.NewEncoder(writer).Encode(map[string]any{"conversation": map[string]any{
-				"id": "c1", "title": "One", "runState": "RUN_STATE_RUNNING",
-			}})
+			var body map[string]any
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			if body["conversationId"] != "c1" {
+				t.Errorf("get body = %+v", body)
+			}
+			if _, hasSnake := body["conversation_id"]; hasSnake {
+				t.Errorf("get body must not send duplicate conversation_id: %+v", body)
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"id":          "c1",
+				"metadata":    map[string]any{"projectId": "p1"},
+				"annotations": map[string]any{"title": "One"},
+				"state":       map[string]any{"runState": "RUN_STATE_RUNNING"},
+			})
 		case "/product.v1.ConversationService/CreateConversation":
 			var body map[string]any
 			_ = json.NewDecoder(request.Body).Decode(&body)
-			if body["project_id"] != "p1" || body["title"] != "New" || body["model"] != "m" {
+			if body["projectId"] != "p1" || body["title"] != "New" || body["model"] != "m" {
 				t.Errorf("create body = %+v", body)
 			}
-			messages, _ := body["messages"].([]any)
-			if len(messages) != 1 {
-				t.Errorf("messages = %+v", messages)
+			prompt, _ := body["prompt"].([]any)
+			if len(prompt) != 1 {
+				t.Errorf("prompt = %+v", prompt)
 			}
-			_ = json.NewEncoder(writer).Encode(map[string]any{"conversation": map[string]any{"id": "c2", "title": "New"}})
+			_ = json.NewEncoder(writer).Encode(map[string]any{"conversation": map[string]any{
+				"id":          "c2",
+				"metadata":    map[string]any{"projectId": "p1"},
+				"annotations": map[string]any{"title": "New"},
+				"state":       map[string]any{"runState": "RUN_STATE_RUNNING"},
+			}})
 		default:
 			http.NotFound(writer, request)
 		}
@@ -58,14 +91,18 @@ func TestConversationServiceClientSendsOfficialHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(conversations) != 1 || !conversations[0].Archived || conversations[0].ParentConversationID != "parent" {
-		t.Fatalf("list = %+v", conversations)
+	if len(conversations) != 2 || !conversations[0].Archived || conversations[0].ParentConversationID != "parent" ||
+		conversations[0].ProjectID != "p1" || conversations[0].Title != "One" || conversations[0].RunState != "RUN_STATE_RUNNING" {
+		t.Fatalf("list[0] = %+v", conversations)
+	}
+	if conversations[1].ID != "c-summary" || conversations[1].ProjectID != "p2" || conversations[1].Title != "Fallback summary title" {
+		t.Fatalf("list[1] = %+v", conversations[1])
 	}
 	conversation, err := client.GetConversation(context.Background(), "c1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if conversation.RunState != "RUN_STATE_RUNNING" {
+	if conversation.RunState != "RUN_STATE_RUNNING" || conversation.ProjectID != "p1" || conversation.Title != "One" {
 		t.Fatalf("get = %+v", conversation)
 	}
 	created, err := client.CreateConversation(context.Background(), CreateConversationRequest{
@@ -74,10 +111,10 @@ func TestConversationServiceClientSendsOfficialHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.ID != "c2" {
+	if created.ID != "c2" || created.ProjectID != "p1" {
 		t.Fatalf("create = %+v", created)
 	}
-	if len(seen) != 3 {
+	if len(seen) != 4 {
 		t.Fatalf("paths = %v", seen)
 	}
 }

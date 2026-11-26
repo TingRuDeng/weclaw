@@ -48,16 +48,40 @@ func NewConversationServiceFromEnv() (*ConversationServiceClient, error) {
 	)
 }
 
+const (
+	listConversationsPageSize = 100
+	listConversationsMaxPages = 5
+)
+
 func (c *ConversationServiceClient) ListConversations(ctx context.Context) ([]UpstreamConversation, error) {
-	var response struct {
-		Conversations []conversationWire `json:"conversations"`
-	}
-	if err := c.call(ctx, "ListConversations", map[string]any{}, &response); err != nil {
-		return nil, err
-	}
-	conversations := make([]UpstreamConversation, 0, len(response.Conversations))
-	for _, wire := range response.Conversations {
-		conversations = append(conversations, wire.normalize())
+	conversations := make([]UpstreamConversation, 0, listConversationsPageSize)
+	pageToken := ""
+	seenTokens := make(map[string]bool)
+	for page := 0; page < listConversationsMaxPages; page++ {
+		request := map[string]any{
+			"pageSize":        listConversationsPageSize,
+			"includeArchived": false,
+		}
+		if pageToken != "" {
+			request["pageToken"] = pageToken
+		}
+		var response struct {
+			Conversations      []conversationWire `json:"conversations"`
+			NextPageToken      string             `json:"nextPageToken"`
+			NextPageTokenSnake string             `json:"next_page_token"`
+		}
+		if err := c.call(ctx, "ListConversations", request, &response); err != nil {
+			return nil, err
+		}
+		for _, wire := range response.Conversations {
+			conversations = append(conversations, wire.normalize())
+		}
+		nextToken := firstNonEmpty(response.NextPageToken, response.NextPageTokenSnake)
+		if nextToken == "" || seenTokens[nextToken] {
+			break
+		}
+		seenTokens[nextToken] = true
+		pageToken = nextToken
 	}
 	return conversations, nil
 }
@@ -66,7 +90,7 @@ func (c *ConversationServiceClient) GetConversation(ctx context.Context, id stri
 	if err := validateConversationID(id); err != nil {
 		return UpstreamConversation{}, err
 	}
-	request := map[string]any{"conversation_id": id, "conversationId": id}
+	request := map[string]any{"conversationId": id}
 	var raw json.RawMessage
 	if err := c.call(ctx, "GetConversation", request, &raw); err != nil {
 		return UpstreamConversation{}, err
@@ -80,10 +104,14 @@ func (c *ConversationServiceClient) GetConversation(ctx context.Context, id stri
 
 func (c *ConversationServiceClient) CreateConversation(ctx context.Context, req CreateConversationRequest) (UpstreamConversation, error) {
 	request := map[string]any{
-		"project_id": req.ProjectID,
-		"title":      req.Title,
-		"model":      req.Model,
-		"messages":   []map[string]string{{"text": req.Prompt}},
+		"projectId": req.ProjectID,
+		"prompt":    []map[string]string{{"text": req.Prompt}},
+	}
+	if title := strings.TrimSpace(req.Title); title != "" {
+		request["title"] = title
+	}
+	if model := strings.TrimSpace(req.Model); model != "" {
+		request["model"] = model
 	}
 	var raw json.RawMessage
 	if err := c.call(ctx, "CreateConversation", request, &raw); err != nil {
@@ -132,28 +160,67 @@ func (c *ConversationServiceClient) call(ctx context.Context, method string, req
 	return nil
 }
 
-type conversationWire struct {
-	ID                    string `json:"id"`
-	ConversationID        string `json:"conversationId"`
-	ConversationIDSnake   string `json:"conversation_id"`
-	Title                 string `json:"title"`
-	ParentConversationID  string `json:"parentConversationId"`
-	ParentConversationIDS string `json:"parent_conversation_id"`
-	Archived              bool   `json:"archived"`
+type conversationMetadataWire struct {
 	ProjectID             string `json:"projectId"`
 	ProjectIDSnake        string `json:"project_id"`
-	RunState              string `json:"runState"`
-	RunStateSnake         string `json:"run_state"`
+	ParentConversationID  string `json:"parentConversationId"`
+	ParentConversationIDS string `json:"parent_conversation_id"`
+}
+
+type conversationAnnotationsWire struct {
+	Title    string `json:"title"`
+	Archived bool   `json:"archived"`
+}
+
+type conversationStateWire struct {
+	Summary       string `json:"summary"`
+	RunState      string `json:"runState"`
+	RunStateSnake string `json:"run_state"`
+}
+
+type conversationWire struct {
+	ID                    string                       `json:"id"`
+	ConversationID        string                       `json:"conversationId"`
+	ConversationIDSnake   string                       `json:"conversation_id"`
+	Title                 string                       `json:"title"`
+	Summary               string                       `json:"summary"`
+	ParentConversationID  string                       `json:"parentConversationId"`
+	ParentConversationIDS string                       `json:"parent_conversation_id"`
+	Archived              bool                         `json:"archived"`
+	ProjectID             string                       `json:"projectId"`
+	ProjectIDSnake        string                       `json:"project_id"`
+	RunState              string                       `json:"runState"`
+	RunStateSnake         string                       `json:"run_state"`
+	Metadata              *conversationMetadataWire    `json:"metadata"`
+	Annotations           *conversationAnnotationsWire `json:"annotations"`
+	State                 *conversationStateWire       `json:"state"`
 }
 
 func (w conversationWire) normalize() UpstreamConversation {
+	var metaProjectID, metaParentID string
+	if w.Metadata != nil {
+		metaProjectID = firstNonEmpty(w.Metadata.ProjectID, w.Metadata.ProjectIDSnake)
+		metaParentID = firstNonEmpty(w.Metadata.ParentConversationID, w.Metadata.ParentConversationIDS)
+	}
+	var annTitle string
+	archived := w.Archived
+	if w.Annotations != nil {
+		annTitle = w.Annotations.Title
+		archived = archived || w.Annotations.Archived
+	}
+	var stateSummary, stateRunState string
+	if w.State != nil {
+		stateSummary = w.State.Summary
+		stateRunState = firstNonEmpty(w.State.RunState, w.State.RunStateSnake)
+	}
+	title := firstNonEmpty(annTitle, w.Title, sanitizeTranscriptText(stateSummary, 80), sanitizeTranscriptText(w.Summary, 80))
 	return UpstreamConversation{
 		ID:                   firstNonEmpty(w.ID, w.ConversationID, w.ConversationIDSnake),
-		Title:                strings.TrimSpace(w.Title),
-		ProjectID:            firstNonEmpty(w.ProjectID, w.ProjectIDSnake),
-		ParentConversationID: firstNonEmpty(w.ParentConversationID, w.ParentConversationIDS),
-		Archived:             w.Archived,
-		RunState:             firstNonEmpty(w.RunState, w.RunStateSnake),
+		Title:                title,
+		ProjectID:            firstNonEmpty(metaProjectID, w.ProjectID, w.ProjectIDSnake),
+		ParentConversationID: firstNonEmpty(metaParentID, w.ParentConversationID, w.ParentConversationIDS),
+		Archived:             archived,
+		RunState:             firstNonEmpty(stateRunState, w.RunState, w.RunStateSnake),
 	}
 }
 
